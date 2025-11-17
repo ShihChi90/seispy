@@ -9,6 +9,7 @@ import sys
 import glob
 from collections import namedtuple
 from logging import Logger
+from multiprocessing import Pool, cpu_count
 
 import numpy as np
 
@@ -74,8 +75,6 @@ class RFDepth():
     def __init__(self, cpara:CCPPara, log:Logger=SetupLog().RF2depthlog,
                  raytracing3d=False, velmod3d=None, modfolder1d=None) -> None:
         """
-        Convert receiver function to depth axis
-        
         :param cpara: CCPPara object
         :type cpara: CCPPara
         :param log: Log object
@@ -92,8 +91,10 @@ class RFDepth():
         self.modfolder1d = modfolder1d
         self.log = log
         self.raytracing3d = raytracing3d
+        self.velmod3d_path = None  # Store path instead of object
         if velmod3d is not None:
             if isinstance(velmod3d, str):
+                self.velmod3d_path = velmod3d  # Store path for pickling
                 self.mod3d = Mod3DPerturbation(velmod3d, cpara.depth_axis, velmod=cpara.velmod)
             else:
                 log.error('Path to 3d velocity model should be in str')
@@ -127,84 +128,131 @@ class RFDepth():
                 self.prime_comp = comp
                 break
         if not self.prime_comp:
-            self.log.error('No such any RF files in \'R\',' 
+            raise FileNotFoundError('No such any RF files in \'R\',' 
                                       '\'Q\', \'L\', and \'Z\' components')
-            sys.exit(1)
 
-    def makedata(self, psphase=1):
-        """Convert receiver function to depth axis
+    def makedata(self, psphase=1, num_workers=None):
+        """Convert receiver function to depth axis using parallel processing
 
         :param psphase: 1 for Ps, 2 for PpPs, 3 for PpSs
         :type psphase: int
+        :param num_workers: Number of parallel workers (default: cpu_count()//2)
+        :type num_workers: int
         """
+        if num_workers is None:
+            num_workers = max(1, cpu_count() // 2)
+        
+        # Prepare arguments for parallel processing
+        # Pass all necessary data as picklable arguments
+        args_list = []
         for _i, _sta in enumerate(self.sta_info):
-            rfpath = join(self.cpara.rfpath, _sta.station)
-            stadatar = RFStation(rfpath, only_r=True, prime_comp=self.prime_comp)
-            if stadatar.prime_phase == '':
-                self.log.error('Error in reading RF data of station {}'.format(_sta.station))
-                continue
-            stadatar.stel = _sta.stel
-            stadatar.stla = _sta.stla
-            stadatar.stlo = _sta.stlo
-            if stadatar.prime_phase == 'P':
-                sphere = True
-            else:
-                sphere = False
-            self.log.info('the {}th/{} station with {} events'.format(_i + 1, len(self.sta_info), stadatar.ev_num))
-
-            #### 1d model for each station
-            if self.ismod1d:
-                if self.modfolder1d is not None:
-                    velmod = _load_mod(self.modfolder1d, _sta.station)
-                else:
-                    velmod = self.cpara.velmod
-
-                ps_rfdepth, end_index, x_s, _ = psrf2depth(stadatar, self.cpara.depth_axis,
-                            velmod=velmod, srayp=self.cpara.rayp_lib,
-                           sphere=sphere, phase=psphase)
-
-                piercelat, piercelon = np.zeros_like(x_s, dtype=np.float64), np.zeros_like(x_s, dtype=np.float64)
-
-                for j in range(stadatar.ev_num):
-                    piercelat[j], piercelon[j] = latlon_from(_sta.stla, _sta.stlo,
-                                                            stadatar.bazi[j], rad2deg(x_s[j]))
-            else:
-                ### 3d model interp
-                if self.raytracing3d:
-                    pplat_s, pplon_s, pplat_p, pplon_p, newtpds = psrf_3D_raytracing(
-                        stadatar, self.cpara.depth_axis, self.mod3d, srayp=self.srayp, sphere=sphere
-                    )
-                else:
-                    pplat_s, pplon_s, pplat_p, pplon_p, raylength_s, raylength_p, tps = psrf_1D_raytracing(
-                        stadatar, self.cpara.depth_axis, velmod=self.cpara.velmod, srayp=self.srayp, sphere=sphere, phase=psphase
-                    )
-                    newtpds = psrf_3D_migration(
-                        pplat_s, pplon_s, pplat_p, pplon_p, raylength_s, raylength_p,
-                        tps, self.cpara.depth_axis, self.mod3d
-                    )
-                if stadatar.prime_phase == 'P':
-                    piercelat, piercelon = pplat_s, pplon_s
-                else:
-                    piercelat, piercelon = pplat_p, pplon_p
-
-                ps_rfdepth, end_index = time2depth(stadatar, self.cpara.depth_axis, newtpds)
-
-            self._write_rfdep(stadatar, ps_rfdepth, piercelat, piercelon, end_index)
+            args_list.append((
+                _i,
+                _sta,
+                psphase,
+                self.cpara.rfpath,
+                self.prime_comp,
+                self.cpara.depth_axis,
+                self.ismod1d,
+                self.modfolder1d,
+                self.cpara.velmod,
+                self.cpara.rayp_lib,
+                self.raytracing3d,
+                self.velmod3d_path,  # Pass path instead of object
+                self.srayp,
+                len(self.sta_info)
+            ))
+        
+        self.log.info(f'Starting parallel processing with {num_workers} workers for {len(args_list)} stations')
+        
+        # Process stations in parallel
+        with Pool(processes=num_workers) as pool:
+            results = pool.map(_process_single_station_worker, args_list)
+        
+        # Filter out None results (failed stations) and collect valid results
+        self.rfdepth = [r for r in results if r is not None]
+        
+        self.log.info(f'Successfully processed {len(self.rfdepth)}/{len(args_list)} stations')
         np.save(self.cpara.depthdat, self.rfdepth)
 
-    def _write_rfdep(self, stadata, amp, pplat, pplon, end_index):
-        rfdep = {}
-        rfdep['station'] = stadata.staname
-        rfdep['stalat'] = stadata.stla
-        rfdep['stalon'] = stadata.stlo
-        rfdep['depthrange'] = self.cpara.depth_axis
-        rfdep['bazi'] = stadata.bazi
-        rfdep['rayp'] = stadata.rayp
-        rfdep['moveout_correct'] = amp
-        rfdep['piercelat'] = pplat
-        rfdep['piercelon'] = pplon
-        rfdep['stopindex'] = end_index
-        self.rfdepth.append(rfdep)
+
+# Global worker function (outside class for picklability)
+def _process_single_station_worker(args):
+    """Process a single station (worker function for parallel processing)"""
+    (_i, _sta, psphase, rfpath_base, prime_comp, depth_axis, ismod1d, 
+     modfolder1d, velmod_default, rayp_lib, raytracing3d, velmod3d_path, srayp, total_stations) = args
+    
+    rfpath = join(rfpath_base, _sta.station)
+    
+    try:
+        stadatar = RFStation(rfpath, only_r=True, prime_comp=prime_comp)
+        stadatar.stel = _sta.stel
+        stadatar.stla = _sta.stla
+        stadatar.stlo = _sta.stlo
+        if stadatar.prime_phase == 'P':
+            sphere = True
+        else:
+            sphere = False
+        print(f'Processing {_i + 1}/{total_stations}: {_sta.station} with {stadatar.ev_num} events')
+    except Exception as e:
+        print(f'Error reading RF data for station {_sta.station}: {e}')
+        return None
+    
+    #### 1d model for each station
+    if ismod1d:
+        if modfolder1d is not None:
+            velmod = _load_mod(modfolder1d, _sta.station)
+        else:
+            velmod = velmod_default
+
+        ps_rfdepth, end_index, x_s, _ = psrf2depth(stadatar, depth_axis,
+                    velmod=velmod, srayp=rayp_lib,
+                   sphere=sphere, phase=psphase)
+
+        piercelat, piercelon = np.zeros_like(x_s, dtype=np.float64), np.zeros_like(x_s, dtype=np.float64)
+
+        for j in range(stadatar.ev_num):
+            piercelat[j], piercelon[j] = latlon_from(_sta.stla, _sta.stlo,
+                                                    stadatar.bazi[j], rad2deg(x_s[j]))
+    else:
+        ### 3d model interp - recreate the 3D model object from path
+        if velmod3d_path is not None:
+            mod3d = Mod3DPerturbation(velmod3d_path, depth_axis, velmod=velmod_default)
+        else:
+            mod3d = None
+            
+        if raytracing3d:
+            pplat_s, pplon_s, pplat_p, pplon_p, newtpds = psrf_3D_raytracing(
+                stadatar, depth_axis, mod3d, srayp=srayp, sphere=sphere, elevation=stadatar.stel
+            )
+        else:
+            pplat_s, pplon_s, pplat_p, pplon_p, raylength_s, raylength_p, tps = psrf_1D_raytracing(
+                stadatar, depth_axis, velmod=velmod_default, srayp=srayp, sphere=sphere, phase=psphase
+            )
+            newtpds = psrf_3D_migration(
+                pplat_s, pplon_s, pplat_p, pplon_p, raylength_s, raylength_p,
+                tps, depth_axis, mod3d
+            )
+        if stadatar.prime_phase == 'P':
+            piercelat, piercelon = pplat_s, pplon_s
+        else:
+            piercelat, piercelon = pplat_p, pplon_p
+        ps_rfdepth, end_index = time2depth(stadatar, depth_axis, newtpds)
+
+    # Create rfdep dictionary
+    rfdep = {}
+    rfdep['station'] = stadatar.staname
+    rfdep['stalat'] = stadatar.stla
+    rfdep['stalon'] = stadatar.stlo
+    rfdep['depthrange'] = depth_axis
+    rfdep['bazi'] = stadatar.bazi
+    rfdep['rayp'] = stadatar.rayp
+    rfdep['moveout_correct'] = ps_rfdepth
+    rfdep['piercelat'] = piercelat
+    rfdep['piercelon'] = piercelon
+    rfdep['stopindex'] = end_index
+    
+    return rfdep
 
 
 def rf2depth():

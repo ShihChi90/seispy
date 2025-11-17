@@ -62,7 +62,7 @@ class CCPPara(object):
     @property
     def velmod(self):
         return self._velmod
-
+    
     @velmod.setter
     def velmod(self, value):
         if not isinstance(value, str):

@@ -207,13 +207,13 @@ class SynSeis():
             st.filter('bandpass', freqmin=freqmin, freqmax=freqmax,
                       corners=order, zerophase=zerophase)
 
-    def run_deconvolution(self, pre_filt=[0.05, 2], shift=10, f0=2.0, **kwargs):
+    def run_deconvolution(self, pre_filt=[0.05, 2], shift=10, f0=2.5, method="iter", **kwargs):
         if pre_filt is not None:
             self.filter(*pre_filt)
         rfstream = Stream()
         for i, _ in enumerate(self.rayp):
             rftr = RFTrace.deconvolute(self.rstream[i], self.zstream[i], tshift=shift,
-                                       f0=f0, **kwargs)
+                                       f0=f0,method=method, **kwargs)
             rfstream.append(rftr)
         return rfstream
 

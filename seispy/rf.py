@@ -21,12 +21,6 @@ import configparser
 import argparse
 import sys
 import pickle
-import concurrent.futures
-import multiprocessing
-import copy
-
-
-multiprocessing.set_start_method('spawn', force=True)
 
 
 def pickphase(eqs, para, logger):
@@ -46,11 +40,9 @@ def _add_header(st, evt_time, stainfo):
         header = SACTrace.from_obspy_trace(tr).to_obspy_trace().stats.sac
         channel = tr.stats.channel
         for ch in sta.channels:
-            if (ch.code == channel and ch.start_date <= tr.stats.starttime and
-                    (tr.stats.endtime <= ch.end_date or ch.end_date is None)):
+            if ch.code == channel:
                 header.cmpaz = ch.azimuth
-                header.cmpinc = ch.dip + 90
-                break
+                header.cmpinc = -ch.dip
         header.stla = stainfo.stla
         header.stlo = stainfo.stlo
         header.stel = stainfo.stel
@@ -63,8 +55,7 @@ class SACFileNotFoundError(Exception):
     def __init__(self, matchkey):
         self.matchkey = matchkey
     def __str__(self):
-        print('No sac files found with {}'.format(self.matchkey))
-
+        return 'No sac files found with {}'.format(self.matchkey)
 
 def datestr2regex(datestr):
     pattern = datestr.replace('%y', r'\d{2}')
@@ -116,92 +107,51 @@ def read_catalog(logpath:str, b_time, e_time, stla:float, stlo:float,
                     (dis>=dismin) & (dis<=dismax)]
     return eq_lst
 
-def fetch_waveform(eq_lst, para, logger):
-    """Fetch waveforms from remote data server
 
-    :param eq_lst: Earthquake list
-    :type eq_lst: pandas.DataFrame
-    :param para: RFPara object
-    :type para: seispy.para.RFPara
-    :param model: TauPyModel object
-    :type model: obspy.taup.TauPyModel
-    :param logger: Logger
-    :type logger: seispy.setuplog.SetupLog
-    :return: Earthquake list with fetched waveforms
-    :rtype: pandas.DataFrame
-    """
+def fetch_waveform(eq_lst, para, model, logger):
     tb = np.max([2*para.noiselen, 2*para.time_before])
     te = np.max([2*para.noiselen, 2*para.time_after])
-
     try:
         query = para.stainfo.query
     except:
         logger.RFlog.error('Please load station information and search earthquake before fetch waveform')
-
-    def process_row(i, size, row):
-        try:
-            model = TauPyModel(para.velmod)
-        except:
-            logger.RFlog.error('Cannot load velocity model {}'.format(para.velmod))
-            sys.exit(1)
-        new_col = ['dis', 'bazi', 'data', 'datestr']
+    new_col = ['dis', 'bazi', 'data', 'datestr']
+    eqall = []
+    for i, row in eq_lst.iterrows():
         datestr = row['date'].strftime('%Y.%j.%H.%M.%S')
         daz = distaz(para.stainfo.stla, para.stainfo.stlo, row['evla'], row['evlo'])
         arrivals = model.get_travel_times(row['evdp'], daz.delta, phase_list=[para.phase])
-
         if not arrivals:
             logger.RFlog.error('The phase of {} with source depth {} and distance {} is not exists'.format(
-                para.phase, row['evdp'], daz.delta))
-            return None
-
+                                     para.phase, row['evdp'], daz.delta))
+            continue
         if len(arrivals) > 1:
             logger.RFlog.error('More than one phase were calculated with source depth of {} and distance of {}'.format(
-                row['evdp'], daz.delta))
-            return None
-
-        arr_time = arrivals[0].time
-        t1 = row['date'] + arr_time - tb
-        t2 = row['date'] + arr_time + te
+                               row['evdp'], daz.delta))
+        else:
+            arr_time = arrivals[0].time
+        t1 = row['date']+arr_time-tb
+        t2 = row['date']+arr_time+te
         try:
-            logger.RFlog.info('Fetch waveforms of event {} ({}/{}) from {}'.format(datestr, i+1, size, para.data_server))
+            logger.RFlog.info('Fetch waveforms of ({}/{}) event {} from {}'.format(
+                              i+1, eq_lst.shape[0], datestr, para.data_server))
             st = query.client.get_waveforms(para.stainfo.network, para.stainfo.station,
                                             para.stainfo.location, para.stainfo.channel, t1, t2)
             _add_header(st, row['date'], para.stainfo)
         except Exception as e:
             logger.RFlog.error('Error in fetching waveforms of event {}: {}'.format(datestr, str(e).strip()))
-            return None
-
+            continue
         try:
             this_eq = EQ.from_stream(st)
         except Exception as e:
             logger.RFlog.error('{}'.format(e))
-            return None
-
+            continue
         this_eq.get_time_offset(row['date'])
         this_df = pd.DataFrame([[daz.delta, daz.baz, this_eq, datestr]], columns=new_col, index=[i])
-        return this_df
-
-    # parallel downloading waveforms
-    eqall = []
-    # with concurrent.futures.ProcessPoolExecutor(max_workers=para.n_proc) as executor:
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=para.n_proc,
-    ) as executor:
-        futures = {
-            executor.submit(process_row, i, eq_lst.shape[0], row): i
-            for i, row in eq_lst.iterrows()
-        }
-
-    for future in concurrent.futures.as_completed(futures):
-        result = future.result()
-        if result is not None:
-            eqall.append(result)
-    
+        eqall.append(this_df)
     if not eqall:
         logger.RFlog.error('No waveforms fetched')
         sys.exit(1)
-    
-    # list to DataFrame
     eq_match = pd.concat(eqall)
     ind = eq_match.index.drop_duplicates(keep=False)
     eq_match = eq_match.loc[ind]
@@ -274,7 +224,7 @@ def match_eq(eq_lst, pathname, stla, stlo, logger, ref_comp='Z', suffix='SAC', o
         eq_match_lst.append(this_df)
     if not eq_match_lst:
         logger.RFlog.error('No earthquakes matched')
-        sys.exit(1)
+        raise FileNotFoundError('No earthquakes matched')
     eq_match = pd.concat(eq_match_lst)
     ind = eq_match.index.drop_duplicates(keep=False)
     eq_match = eq_match.loc[ind]
@@ -293,13 +243,6 @@ def CfgModify(cfg_file, session, key, value):
 
 class RF(object):
     def __init__(self, cfg_file=None, log=None):
-        """Procedure of Receiver function analysis
-
-        :param cfg_file: Path to configure file, defaults to None
-        :type cfg_file: str, optional
-        :param log: Logger, defaults to None
-        :type log: seispy.setuplog.SetupLog, optional
-        """
         if log is None:
             self.logger = SetupLog()
         else:
@@ -338,11 +281,6 @@ class RF(object):
         self.para.date_end = value
 
     def load_stainfo(self, use_date_range=True):
-        """Load station information from local file or remote web-service
-        
-        :param use_date_range: Use date range to search station information, defaults to True
-        :type use_date_range: bool, optional
-        """
         try:
             if self.para.use_remote_data:
                 self.logger.RFlog.info('Load station info of {}.{} from {} web-service'.format(
@@ -374,13 +312,6 @@ class RF(object):
             sys.exit(1)
 
     def search_eq(self, local=False, catalog=None):
-        """Search earthquakes from local or online data server
-
-        :param local: Search from local data, defaults to False
-        :type local: bool, optional
-        :param catalog: Catalog type, defaults to None
-        :type catalog: str, optional
-        """
         if not local:
             try:
                 self.logger.RFlog.info('Searching earthquakes from {}'.format(self.para.cata_server))
@@ -416,8 +347,8 @@ class RF(object):
         """
         try:
             if self.para.use_remote_data:
-                self.logger.RFlog.info('Fetch seismic data from {} with {} threads'.format(self.para.data_server, self.para.n_proc))
-                self.eqs = fetch_waveform(self.eq_lst, self.para, self.logger)
+                self.logger.RFlog.info('Fetch seismic data from {}'.format(self.para.data_server))
+                self.eqs = fetch_waveform(self.eq_lst, self.para, self.model, self.logger)
             else:
                 self.logger.RFlog.info('Associating SAC files with earthquakes')
                 self.eqs = match_eq(self.eq_lst, self.para.datapath, self.para.stainfo.stla, 
@@ -435,19 +366,15 @@ class RF(object):
             self.logger.RFlog.info('{0} earthquakes are associated'.format(self.eqs.shape[0]))
 
     def save_raw_data(self):
-        """Save raw data to local disk
-        """
         if not exists(self.para.datapath):
             makedirs(self.para.datapath)
         for i, row in self.eqs.iterrows():
             row['data'].write(self.para.datapath, row['date'])
 
     def savepjt(self):
-        """Save project to local disk
-        """
         eqs = self.eqs.copy()
         for _, row in eqs.iterrows():
-            row['data'].cleanstream()
+            row['data']._cleanstream()
         try:
             self.logger.RFlog.info('Saving project to {0}'.format(self.para.pjtpath))
             with open(self.para.pjtpath, 'wb') as f:
@@ -458,13 +385,6 @@ class RF(object):
  
     @classmethod
     def loadpjt(cls, path):
-        """Load project from local disk
-
-        :param path: Path to project file
-        :type path: str
-        :return: Project object
-        :rtype: seispy.rf.RF
-        """
         with open(path, 'rb') as f:
             rfdata = pickle.load(f)
         pjt = cls(phase=rfdata['para'].phase)
@@ -483,8 +403,6 @@ class RF(object):
         return pjt
 
     def channel_correct(self):
-        """Correct channel components
-        """
         if self.para.switchEN or self.para.reverseN or self.para.reverseE:
             self.logger.RFlog.info('Correct components with switchEN: {}, reverseE: {}, reverseN: {}'.format(
                                     self.para.switchEN, self.para.reverseE, self.para.reverseN))
@@ -492,8 +410,6 @@ class RF(object):
                 row['data'].channel_correct(self.para.switchEN, self.para.reverseE, self.para.reverseN)
         
     def detrend(self):
-        """Detrend all data
-        """
         self.logger.RFlog.info('Detrend all data')
         drop_idx = []
         for i, row in self.eqs.iterrows():
@@ -505,15 +421,6 @@ class RF(object):
         self.eqs.drop(drop_idx, inplace=True)
 
     def filter(self, freqmin=None, freqmax=None, order=4):
-        """Filter all data
-
-        :param freqmin: Minimum frequency, defaults to self.para.freqmin
-        :type freqmin: float, optional
-        :param freqmax: Maximum frequency, defaults to self.para.freqmax
-        :type freqmax: float, optional
-        :param order: Order of filter, defaults to 4
-        :type order: int, optional
-        """
         if freqmin is None:
             freqmin = self.para.freqmin
         if freqmax is None:
@@ -523,24 +430,11 @@ class RF(object):
             row['data'].filter(freqmin=freqmin, freqmax=freqmax, order=order)
 
     def cal_phase(self):
-        """Calculate arrivals and ray parameters for all data
-        """
         self.logger.RFlog.info('Calculate {} arrivals and ray parameters for all data'.format(self.para.phase))
         for _, row in self.eqs.iterrows():
             row['data'].get_arrival(self.model, row['evdp'], row['dis'], phase=self.para.phase)
 
     def baz_correct(self, time_b=10, time_e=20, offset=90, correct_angle=None):
-        """Correct back-azimuth for all data
-
-        :param time_b: Begin time of searching, defaults to 10
-        :type time_b: int, optional
-        :param time_e: End time of searching, defaults to 20
-        :type time_e: int, optional
-        :param offset: Offset of searching, defaults to 90
-        :type offset: int, optional
-        :param correct_angle: Correct angle, defaults to None
-        :type correct_angle: float, optional
-        """
         if correct_angle is not None:
             self.logger.RFlog.info('correct back-azimuth with {} deg.'.format(correct_angle))
             self.eqs['bazi'] = np.mod(self.eqs['bazi'] + correct_angle, 360)
@@ -561,11 +455,6 @@ class RF(object):
             self.logger.RFlog.info('Average {:.1f} deg offset in back-azimuth'.format(self.baz_shift))
 
     def rotate(self, search_inc=False):
-        """Rotate all data to ZNE or RTZ
-
-        :param search_inc: Search incidence angle, defaults to False
-        :type search_inc: bool, optional
-        """
         targ_comp = ''.join(sorted(self.para.comp.upper()))
         if targ_comp == 'RTZ':
             method='NE->RT'
@@ -588,19 +477,13 @@ class RF(object):
         self.eqs.drop(drop_idx, inplace=True)
 
     def drop_eq_snr(self, length=None, z_only=False):
-        """Drop earthquakes with low SNR
-
-        :param length: Length of data, defaults to None
-        :type length: int, optional
-        :param z_only: Use Z component only, defaults to False
-        :type z_only: bool, optional
-        """
         if length is None:
             length = self.para.noiselen
         self.logger.RFlog.info('Reject data record with SNR less than {0}'.format(self.para.noisegate))
         drop_lst = []
         for i, row in self.eqs.iterrows():
             snr_E, snr_N, snr_Z = row['data'].snr(length=length)
+            # snr_E, snr_N, snr_Z = row['data'].custom_snr(signallen=3, noiselen=20)
             if z_only:
                 mean_snr = snr_Z
             else:
@@ -611,34 +494,42 @@ class RF(object):
         self.logger.RFlog.info('{0} events left after SNR calculation'.format(self.eqs.shape[0]))
 
     def trim(self):
-        """Trim waveforms from start to end
-        """
         self.logger.RFlog.info('Trim waveforms from {0:.2f} before {2} to {1:.2f} after {2}'.format(
                                self.para.time_before, self.para.time_after, self.para.phase))
         for _, row in self.eqs.iterrows():
             row['data'].trim(self.para.time_before, self.para.time_after)
     
-    def pick(self, prepick=True, stl=5, ltl=10):
-        """Pick phase arrival
-
-        :param prepick: Use STA/LTA method, defaults to True
-        :type prepick: bool, optional
-        :param stl: Short time length, defaults to 5
-        :type stl: int, optional
-        :param ltl: Long time length, defaults to 10
-        :type ltl: int, optional
-        """
-        if prepick:
-            self.logger.RFlog.info('Pre-pick {} arrival using STA/LTA method'.format(self.para.phase))
-        for _, row in self.eqs.iterrows():
-            row['data'].phase_trigger(self.para.time_before, self.para.time_after,
-                                      prepick=prepick, stl=stl, ltl=ltl)
+    def pick(self, prepick=True, stl=5, ltl=10, pickdir=None):
+        self.logger.RFlog.info(f'preparing for picking...')
+        if pickdir:
+            self.logger.RFlog.info('search for pick file at {}'.format(pickdir))
+            pick_file = join(pickdir,f"{self.para.stainfo.station}_times.txt")
+            self.logger.RFlog.info('Load picks from {}'.format(pick_file))
+            picks = {}
+            with open(pick_file, 'r') as f:
+                for line in f:
+                    datetime_str, t1, shift = line.strip().split()
+                    picks[datetime_str] = (float(t1), float(shift))
+            # for _, row in self.eqs.iterrows():
+            #     row['data'].trigger_shift = picks[datetime_str][1]
+            for _, row in self.eqs.iterrows():
+                # print(picks[row['data'].datestr][1])
+                if row['data'].datestr not in picks:
+                    self.logger.RFlog.info('no pick for {}'.format(row['data'].datestr))
+                    row['data'].phase_trigger(self.para.time_before, self.para.time_after,
+                                            prepick=prepick, stl=stl, ltl=ltl)
+                    continue
+                row['data'].phase_trigger(self.para.time_before, self.para.time_after,
+                                        prepick=prepick, stl=stl, ltl=ltl, custom_shift=picks[row['data'].datestr][1])
+        elif prepick:
+            for _, row in self.eqs.iterrows():
+                self.logger.RFlog.info('Pre-pick {} arrival using STA/LTA method'.format(self.para.phase))
+                row['data'].phase_trigger(self.para.time_before, self.para.time_after,
+                                        prepick=prepick, stl=stl, ltl=ltl)
         pickphase(self.eqs, self.para, self.logger)
         self.logger.RFlog.info('{0} events left after visual checking'.format(self.eqs.shape[0]))
 
     def deconv(self):
-        """Deconvolution for all data
-        """
         shift = self.para.time_before
         time_after = self.para.time_after
         drop_lst = []
@@ -663,11 +554,6 @@ class RF(object):
         self.eqs.drop(drop_lst, inplace=True)
 
     def saverf(self, gauss=None):
-        """Save receiver functions to local disk
-        
-        :param gauss: Gaussian width, defaults to self.para.gauss
-        :type gauss: float, optional
-        """
         npts = int((self.para.time_before + self.para.time_after)/self.para.target_dt+1)
         if self.para.phase[-1] == 'P':
             shift = self.para.time_before
@@ -702,8 +588,6 @@ class RF(object):
 
 
 def setpar():
-    """Set parameters to configure file
-    """
     parser = argparse.ArgumentParser(description="Set parameters to configure file")
     parser.add_argument('cfg_file', type=str, help='Path to configure file')
     parser.add_argument('session', type=str, help='session name')

@@ -37,7 +37,6 @@ class RFStation(object):
         
         self.only_r = only_r
         self.comp = prime_comp
-        self.prime_phase = ''
         self.dtype = {'names': ('event', 'phase', 'evla', 'evlo', 'evdp', 'dis', 'bazi', 'rayp', 'mag', 'f0'),
                  'formats': ('U20', 'U20', 'f4', 'f4', 'f4', 'f4', 'f4', 'f4', 'f4', 'f4')}
         if not exists(data_path):
@@ -56,7 +55,7 @@ class RFStation(object):
             np.loadtxt(evt_lst, dtype=self.dtype, unpack=True, ndmin=1)
         self.rayp = skm2srad(self.rayp)
         self.ev_num = self.evla.shape[0]
-        self._read_sample(data_path)
+        self.read_sample(data_path)
         self.data_prime = np.empty([self.ev_num, self.rflength])
         # self.__dict__['data{}'.format(self.comp.lower())] = np.empty([self.ev_num, self.rflength])
         # eval('self.data_prime = self.data{}'.format(self.comp.lower()))
@@ -73,12 +72,7 @@ class RFStation(object):
                 self.data_prime[_i] = sac.data
         exec('self.data{} = self.data_prime'.format(self.comp.lower()))
 
-    def _read_sample(self, data_path):
-        """Read sample SAC file to get station information
-
-        :param data_path: Path to RF data with SAC format
-        :type data_path: str
-        """
+    def read_sample(self, data_path):
         fname = glob.glob(join(data_path, self.event[0] + '_' + self.phase[0] + '_{}.sac'.format(self.comp)))
         if len(fname) == 0:
             raise FileNotFoundError('No such files with comp of {} in {}'.format(self.comp, data_path))
@@ -96,7 +90,7 @@ class RFStation(object):
         self.sampling = sample_sac.delta
         self.time_axis = np.arange(self.rflength) * self.sampling - self.shift
 
-    def _init_property(self, ev_num):
+    def init_property(self, ev_num):
         self.ev_num = ev_num
         self.event = np.array(['']*ev_num)
         self.phase = np.array(['']*ev_num)
@@ -124,18 +118,16 @@ class RFStation(object):
     def read_stream(cls, stream, rayp, baz, prime_comp='R', stream_t=None):
         """Create RFStation instance from ``obspy.Stream``
 
-        :param stream: Stream of RFs
-        :type stream: :meth:`obspy.Stream`
-        :param rayp: Ray-parameter of RFs
-        :type rayp: float or :meth:`np.ndarray`
-        :param baz: Back-azimuth of RFs
-        :type baz: float or :meth:`np.ndarray`
-        :param prime_comp: Prime component in RF filename. ``R`` or ``Q`` for PRF and ``L`` or ``Z`` for SRF, defaults to 'R'
-        :type prime_comp: str, optional
-        :param stream_t: Stream of transverse RFs, defaults to None
-        :type stream_t: :meth:`obspy.Stream`, optional
-        :return: RFStation instance
-        :rtype: RFStation
+        Parameters
+        ----------
+        stream : ``obspy.Stream``
+            _description_
+        rayp : ``numpy.ndarray`` or ``float``
+            Ray-parameters in s/km.
+        baz : ``numpy.ndarray`` or ``float``
+            Back-azimuth
+        prime_comp : str, optional
+             Prime component of RF, by default 'R'
         """
         if len(stream) == 0:
             raise ValueError('No such RFTrace read')
@@ -153,7 +145,7 @@ class RFStation(object):
             baz = np.ones(ev_num)*baz
         if ev_num != rayp.size or ev_num != baz.size:
             raise ValueError('Array length of rayp and baz must be the same as stream')
-        rfsta._init_property(ev_num)
+        rfsta.init_property(ev_num)
         try:
             rfsta.staname = '{}.{}'.format(stream[0].stats.sac.knetwk, stream[0].stats.sac.kstnm)
             rfsta.stla = stream[0].stats.sac.stla
@@ -234,7 +226,6 @@ class RFStation(object):
 
     def normalize(self, method='single'):
         """Normalize amplitude of each RFs.
-
         :param method: Method of normalization with ``single`` and ``average`` avaliable.
                      - ``single`` for normalization with max amplitude of current RF.
                      - ``average`` for normalization with average amplitude of current station.
@@ -258,8 +249,11 @@ class RFStation(object):
     def resample(self, dt):
         """Resample RFs with specified dt
 
-        :param dt: New sampling rate
-        :type dt: float
+
+        Parameters
+        ----------
+        dt : ``float``
+            Target sampling interval in sec
         """
         npts = int(self.rflength * (self.sampling / dt)) + 1
         self.data_prime = resample(self.data_prime, npts, axis=1)
@@ -359,51 +353,16 @@ class RFStation(object):
         return pplat_s, pplon_s, tps
 
     def psrf_3D_raytracing(self, mod3dpath, dep_range=np.arange(0, 150), srayp=None):
-        """3D back ray tracing to obtained Ps conversion points at discret depths
-
-        :param mod3dpath: Path to 3D velocity model
-        :type mod3dpath: str
-        :param dep_range: Discret conversion depth, defaults to np.arange(0, 150)
-        :type dep_range: numpy.ndarray, optional
-        :param srayp: Ray-parameter lib for Ps phases, If set up to None the rayp of direct is used, defaults to None
-        :type srayp: numpy.lib.npyio.NpzFile, optional
-        :return pplat_s: Latitude of conversion points
-        :return pplon_s: Longitude of conversion points
-        :return tps: Time difference of Ps at each depth
-        :rtype: list
-        """
         self.dep_range = dep_range
         mod3d = Mod3DPerturbation(mod3dpath, dep_range)
         pplat_s, pplon_s, _, _, tps = psrf_3D_raytracing(self, dep_range, mod3d, srayp=srayp)
         return pplat_s, pplon_s, tps
 
     def psrf_3D_moveoutcorrect(self, mod3dpath, **kwargs):
-        """3D moveout correction with 3D velocity model
-
-        :param mod3dpath: Path to 3D velocity model
-        :type mod3dpath: str
-        :param dep_range: Discret conversion depth, defaults to np.arange(0, 150)
-        :type dep_range: numpy.ndarray, optional
-        :param srayp: Ray-parameter lib for Ps phases, If set up to None the rayp of direct is used, defaults to None
-        :type srayp: numpy.lib.npyio.NpzFile, optional
-        :return: 2D array of RFs in depth
-        :rtype: numpy.ndarray
-        """
         warnings.warn('The fuction will be change to RFStation.psrf_3D_timecorrect in the future')
         self.psrf_3D_timecorrect(mod3dpath, **kwargs)
 
     def psrf_3D_timecorrect(self,  mod3dpath, dep_range=np.arange(0, 150), normalize='single', **kwargs):
-        """3D time-to-depth conversion with 3D velocity model
-        
-        :param mod3dpath: Path to 3D velocity model
-        :type mod3dpath: str
-        :param dep_range: Discret conversion depth, defaults to np.arange(0, 150)
-        :type dep_range: numpy.ndarray, optional
-        :param normalize: Normalization method, defaults to 'single', see RFStation.normalize for detail
-        :type normalize: str, optional
-        :return: 2D array of RFs in depth
-        :rtype: numpy.ndarray
-        """
         self.dep_range = dep_range
         mod3d = Mod3DPerturbation(mod3dpath, dep_range)
         pplat_s, pplon_s, pplat_p, pplon_p, raylength_s, raylength_p, tps = psrf_1D_raytracing(self, dep_range, **kwargs)
@@ -440,15 +399,6 @@ class RFStation(object):
         return best_f, best_t
 
     def slantstack(self, ref_dis=None, rayp_range=None, tau_range=None):
-        """Slant stack for receiver function
-
-        :param ref_dis: reference distance, by default None
-        :type ref_dis: int or float, optional
-        :param rayp_range: range of ray parameter, by default None
-        :type rayp_range: numpy.ndarray, optional
-        :param tau_range: range of tau, by default None
-        :type tau_range: numpy.ndarray, optional
-        """
         self.slant = SlantStack(self.data_prime, self.time_axis, self.dis)
         self.slant.stack(ref_dis, rayp_range, tau_range)
         return self.slant.stack_amp
@@ -460,10 +410,14 @@ class RFStation(object):
         :type tb: ``float``, optional
         :param te: End time relative to P, defaults to 10
         :type te: ``float``, optional
-        :param is_stack: Wether stack the result, defaults to True
-        :type is_stack: bool, optional
-        :return: Harmonic components and unmodel components
-        :rtype: ``numpy.ndarray``, ``numpy.ndarray``
+
+        Returns
+        -------
+        harmonic_trans: numpy.ndarray, float
+                Harmonic components with shape of ``(5, nsamp)``, ``nsamp = (te-tb)/RFStation.sampling``
+
+        unmodel_trans: numpy.ndarray, float
+                Unmodel components with same shape as harmonic_trans.
         """
         if self.only_r:
             raise ValueError('Transverse RFs are nessary for harmonic decomposition')
@@ -471,19 +425,13 @@ class RFStation(object):
         self.harmo.harmo_trans()
         return self.harmo.harmonic_trans, self.harmo.unmodel_trans
 
-    def plotrt(self, **kwargs):
-        """Plot radial and transverse RFs
-        :param kwargs: Parameters for plot, see :meth:`seispy.plotRT.plotrt` for detail
-        """
+    def plotrt(self, outformat=None, **kwargs):
         if self.only_r:
             raise ValueError('Transverse RFs are nessary or use RFStation.plotr instead.')
-        return _plotrt(self, **kwargs)
+        return _plotrt(self, outformat=outformat, **kwargs)
 
-    def plotr(self,**kwargs):
-        """Plot radial RFs
-        :param kwargs: Parameters for plot, see :meth:`seispy.plotR.plotr` for detail
-        """
-        return _plotr(self, **kwargs)
+    def plotr(self, outformat=None, **kwargs):
+        return _plotr(self, outformat=outformat, **kwargs)
 
 
 class SACStation(RFStation):
@@ -713,6 +661,7 @@ def psrf_1D_raytracing(stadatar, YAxisRange, velmod='iasp91', srayp=None, sphere
         for i in range(stadatar.ev_num):
             tps[i], x_s, x_p, raylength_s[i], raylength_p[i] = xps_tps_map(
                 dep_mod, stadatar.rayp[i], stadatar.rayp[i], is_raylen=True, sphere=sphere, phase=phase)
+            # print(type(stadatar.bazi[i]), type(rad2deg(x_s)))
             pplat_s[i], pplon_s[i] = latlon_from(stadatar.stla, stadatar.stlo, stadatar.bazi[i], rad2deg(x_s))
             pplat_p[i], pplon_p[i] = latlon_from(stadatar.stla, stadatar.stlo, stadatar.bazi[i], rad2deg(x_p))
     elif isinstance(srayp, str) or isinstance(srayp, np.lib.npyio.NpzFile):
@@ -757,8 +706,8 @@ def psrf_3D_raytracing(stadatar, YAxisRange, mod3d, srayp=None, elevation=0, sph
         R = 6371.0 - YAxisRange + elevation
     else:
         R = 6371.0 + elevation
-    dep_range = YAxisRange.copy()
-    YAxisRange -= elevation
+    YAxisRange_shifted = YAxisRange - elevation
+    dep_range = YAxisRange_shifted.copy()
     ddepth = np.mean(np.diff(YAxisRange))
     pplat_s = np.zeros([stadatar.ev_num, YAxisRange.shape[0]])
     pplon_s = np.zeros([stadatar.ev_num, YAxisRange.shape[0]])
@@ -768,7 +717,10 @@ def psrf_3D_raytracing(stadatar, YAxisRange, mod3d, srayp=None, elevation=0, sph
     x_p = np.zeros([stadatar.ev_num, YAxisRange.shape[0]])
     tps = np.zeros([stadatar.ev_num, YAxisRange.shape[0]])
     rayps = srad2skm(stadatar.rayp)
-
+    # print('Ray parameter of Ps phases: ', stadatar.rayp)
+    # print('Ray parameter of P phases: ', rayps)
+    # rayps = stadatar.rayp.copy()
+    # print("srayp is: ", srayp)
     if isinstance(srayp, str) or isinstance(srayp, np.lib.npyio.NpzFile):
         if isinstance(srayp, str):
             if not exists(srayp):
@@ -785,6 +737,7 @@ def psrf_3D_raytracing(stadatar, YAxisRange, mod3d, srayp=None, elevation=0, sph
     for i in range(stadatar.ev_num):
         if srayp is None:
             srayps = stadatar.rayp[i]
+            srayps = srad2skm(srayps)
         else:
             srayps = get_psrayp(rayp_lib, stadatar.dis[i],
                                 stadatar.evdp[i], YAxisRange)
@@ -812,11 +765,17 @@ def psrf_3D_raytracing(stadatar, YAxisRange, mod3d, srayp=None, elevation=0, sph
                                                            stadatar.stlo,
                                                            stadatar.bazi[i],
                                                            km2deg(x_p[i, j+1]))
+        # print(srayps, rayps[i])
         tps_corr = np.cumsum((np.sqrt((R / vs) ** 2 - srayps ** 2) -
-                            np.sqrt((R / vp) ** 2 - stadatar.rayp[i] ** 2))
+                            np.sqrt((R / vp) ** 2 - rayps[i] ** 2))
                             * (ddepth / R))
+        # print('tps_corr: ', tps_corr)
         if elevation != 0:
-            tps[i] = interp1d(YAxisRange, tps_corr)(dep_range)
+            tps[i] = interp1d(YAxisRange_shifted, tps_corr, bounds_error=False, fill_value="extrapolate")(dep_range)
+        else:
+            tps = tps_corr.copy()
+        # if i == 0:
+        #     print(pplat_s, pplon_s, pplat_p, pplon_p, tps)
     return pplat_s, pplon_s, pplat_p, pplon_p, tps
 
 
@@ -908,8 +867,12 @@ def time2depth(stadatar, dep_range, Tpds, normalize='single'):
         elif np.max(ValueIndices) > PS_RFTempAmps.shape[0]:
             continue
         else:
+            # print("TempTpds:", TempTpds[0:EndIndex[i]+1])
+            # print("stadatar.time_axis:", stadatar.time_axis)
+            # print("PS_RFTempAmps:", PS_RFTempAmps)
             PS_RFAmps = interp1d(stadatar.time_axis, PS_RFTempAmps, bounds_error=False)(TempTpds[0:EndIndex[i]+1])
             PS_RFdepth[i] = PS_RFAmps
+    # print(PS_RFdepth[0], EndIndex[0])
     return PS_RFdepth, EndIndex
 
 

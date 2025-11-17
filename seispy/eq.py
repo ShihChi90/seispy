@@ -25,18 +25,14 @@ class TooMoreComponents(Exception):
         return '{}'.format(self.matchkey)
 
 def rotateZNE(st):
-    """Rotate non-standard components (e.g., 1, 2, Z) to N, E, Z components
-    and reorder the components to ensure that the final *.BHZ.SAC files have correct cmpaz (=0) and cmpinc (=0) headers.
-    """
     try:
         zne = rotate2zne(
-            st[0].data, st[0].stats.sac.cmpaz, st[0].stats.sac.cmpinc - 90,
-            st[1].data, st[1].stats.sac.cmpaz, st[1].stats.sac.cmpinc - 90,
-            st[2].data, st[2].stats.sac.cmpaz, st[2].stats.sac.cmpinc - 90)
-        nez = [zne[1], zne[2], zne[0]]  # change order from ZNE to NEZ
+            st[0], st[0].stats.sac.cmpaz, st[0].stats.sac.cmpinc,
+            st[1], st[1].stats.sac.cmpaz, st[1].stats.sac.cmpinc,
+            st[2], st[2].stats.sac.cmpaz, st[2].stats.sac.cmpinc)
     except Exception as e:
         raise ValueError('No specified cmpaz or cmpinc. {}'.format(e))
-    for tr, new_data, component in zip(st, nez, "NEZ"):
+    for tr, new_data, component in zip(st, zne, "ZNE"):
         tr.data = new_data
         tr.stats.channel = tr.stats.channel[:-1] + component
 
@@ -74,7 +70,7 @@ class EQ(object):
     def _check_comp(self):
         if len(self.st) < 3:
             channel = ' '.join([tr.stats.channel for tr in self.st])
-            raise NotEnoughComponent('Sismogram must be in 3 components, but there are only channel {} of {}'.format(channel, self.datestr))
+            raise NotEnoughComponent('Seismogram must be in 3 components, but there are only channel {} of {}'.format(channel, self.datestr))
         elif len(self.st) > 3:
             raise TooMoreComponents('{} has more than 3 components, please select to delete redundant seismic components'.format(self.datestr))
         else:
@@ -96,7 +92,6 @@ class EQ(object):
     @classmethod
     def from_stream(cls, stream):
         """Create EQ object from obspy stream
-
         :param stream: obspy stream
         :type stream: obspy.Stream
         :return: EQ object
@@ -143,13 +138,6 @@ class EQ(object):
             self.st.select(channel='*[N1]')[0].stats.channel = chE
 
     def write(self, path, evt_datetime):
-        """Write raw stream to SAC files
-
-        :param path: path to save SAC files
-        :type path: str
-        :param evt_datetime: event datetime
-        :type evt_datetime: obspy.core.utcdatetime.UTCDateTime
-        """
         for tr in self.st:
             sac = SACTrace.from_obspy_trace(tr)
             sac.b = 0
@@ -170,7 +158,6 @@ class EQ(object):
 
     def filter(self, freqmin=0.05, freqmax=1, order=4):
         """Bandpass filter
-
         :param freqmin: minimum frequency, defaults to 0.05
         :type freqmin: float, optional
         :param freqmax: maximum frequency, defaults to 1
@@ -182,7 +169,6 @@ class EQ(object):
 
     def get_arrival(self, model, evdp, dis, phase='P'):
         """Get arrival time, ray parameter and incident angle from TauP model
-
         :param model: TauP model
         :type model: TauPyModel
         :param evdp: focal depth
@@ -205,7 +191,6 @@ class EQ(object):
 
     def search_inc(self, bazi):
         """Search incident angle for S wave
-
         :param bazi: back azimuth
         :type bazi: float
         :return: incident angle
@@ -225,7 +210,6 @@ class EQ(object):
 
     def search_baz(self, bazi, time_b=10, time_e=20, offset=90):
         """Search back azimuth for P wave
-
         :param bazi: back azimuth
         :type bazi: float
         :param time_b: time before P arrival, defaults to 10
@@ -257,7 +241,7 @@ class EQ(object):
         return corr_baz, ampt
 
     def fix_channel_name(self):
-        """Fix channel name for Z, E, N components
+        """Fix channel name for R, E, N components
         """
         if self.st.select(channel='??1') and self.st.select(channel='??Z') and hasattr(self.st.select(channel='*1')[0].stats.sac, 'cmpaz'):
             if self.st.select(channel='*1')[0].stats.sac.cmpaz == 0:
@@ -276,7 +260,6 @@ class EQ(object):
 
     def rotate(self, baz, inc=None, method='NE->RT', search_inc=False, baz_shift=0):
         """Rotate to radial and transverse components
-
         :param baz: back azimuth
         :type baz: float
         :param inc: incident angle, defaults to None
@@ -310,7 +293,6 @@ class EQ(object):
 
     def snr(self, length=50):
         """Calculate SNR
-
         :param length: length for noise, defaults to 50
         :type length: int, optional
         :return: SNR of E, N, Z components
@@ -332,9 +314,17 @@ class EQ(object):
             snr_Z = 0
         return snr_E, snr_N, snr_Z
     
+    def custom_snr(self, signallen=5, noiselen=20):
+        st_noise = self.trim(noiselen, 0, isreturn=True)
+        st_signal = self.trim(0, signallen, isreturn=True)
+        snr_E = snr(np.array([max(abs(st_signal[0].data))]), st_noise[0].data)
+        snr_N = snr(np.array([max(abs(st_signal[1].data))]), st_noise[1].data)
+        snr_Z = snr(np.array([max(abs(st_signal[2].data))]), st_noise[2].data)
+        
+        return snr_E, snr_N, snr_Z
+    
     def get_time_offset(self, event_time=None):
         """Get time offset from SAC header
-
         :param event_time: event time, defaults to None
         :type event_time: obspy.core.utcdatetime.UTCDateTime, optional
         """
@@ -363,9 +353,8 @@ class EQ(object):
         t2 = self.st[2].stats.starttime + (arr + self.trigger_shift + time_after)
         return t1, t2
 
-    def phase_trigger(self, time_before, time_after, prepick=True, stl=5, ltl=10):
+    def phase_trigger(self, time_before, time_after, prepick=True, stl=5, ltl=10, custom_shift=None):
         """ Trigger P or S phase
-
         :param time_before: time before P or S arrival
         :type time_before: float
         :param time_after: time after P or S arrival
@@ -391,6 +380,9 @@ class EQ(object):
             n_trigger = np.argmax(np.diff(cft)[int(ltl*df):])+int(ltl*df)
             self.t_trigger = t1 + n_trigger/df
             self.trigger_shift = n_trigger/df - time_before
+        elif custom_shift is not None:
+            self.t_trigger = t1 + custom_shift
+            self.trigger_shift = custom_shift
         else:
             self.t_trigger = t1
             self.trigger_shift = 0.0
@@ -464,7 +456,6 @@ class EQ(object):
     
     def decon_p(self, tshift, tcomp=False, **kwargs):
         """Deconvolution for P wave
-
         :param tshift: Time shift before P arrival
         :type tshift: float
         :param tcomp: Whether calculate transverse component, defaults to False
@@ -488,7 +479,6 @@ class EQ(object):
 
     def decon_s(self, tshift, **kwargs):
         """Deconvolution for S wave
-
         :param tshift: Time shift before P arrival
         :type tshift: float
         """
@@ -508,7 +498,6 @@ class EQ(object):
                evlo=-12345., evdp=-12345., mag=-12345.,
                gauss=0, baz=-12345., gcarc=-12345., only_r=False, **kwargs):
         """Save receiver function to SAC file
-
         :param path: path to save SAC file
         :type path: str
         :param evtstr: event string, defaults to None
@@ -582,7 +571,6 @@ class EQ(object):
 
     def judge_rf(self, gauss, shift, npts, criterion='crust', rmsgate=None):
         """Judge whether receiver function is valid
-        
         :param gauss: Gaussian factor
         :type gauss: float
         :param shift: time shift before P arrival
@@ -665,5 +653,26 @@ class EQ(object):
 
 
 if __name__ == '__main__':
+    from obspy import read, Stream
+    from obspy.taup import TauPyModel
+    # from glob import glob
+    iasp91 = TauPyModel(model="iasp91")
+    trlst = sorted(glob.glob("/home/seismograms/SALUTE/sacdata_d28-95_rotate/TR05/PST2/2022*.sac"))
+    snr_results = []
+    for i in range(0, len(trlst), 3):
+        trace = read(trlst[i]) + read(trlst[i+1]) + read(trlst[i+2])
+        try:
+            earthquake = EQ.from_stream(trace)
+            earthquake.get_arrival(iasp91, trace[0].stats.sac["evdp"], trace[0].stats.sac["gcarc"], "P")
+            snr_E, snr_N, snr_Z = earthquake.custom_snr()
+            snr_results.append((snr_E, snr_N, snr_Z))
+            print(f"Group {i//3}: SNR_E={snr_E}, SNR_N={snr_N}, SNR_Z={snr_Z}")
+        except Exception as e:
+            print(f"Error processing event {trace.__str__()}: {e}")
+            continue
+    # print(trace[0].stats.sac)
+    # earthquake.get_arrival(iasp91, trace[0].stats.sac["evdp"], trace[0].stats.sac["gcarc"], "P")
+    # snr_Z = earthquake.custom_snr()
+    # print(snr_Z)
     pass
 

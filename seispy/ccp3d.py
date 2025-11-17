@@ -11,6 +11,7 @@ from scipy.interpolate import interp1d
 import pyproj
 import warnings
 import sys
+import multiprocessing
 
 
 def gen_center_bin(center_lat, center_lon, len_lat, len_lon, val):
@@ -81,6 +82,20 @@ def boot_bin_stack(data_bin, n_samples=3000):
     :return: Mean, confidence interval and number of data falling within a bin.
     :rtype: tuple of floats and int
     """
+    # warnings.filterwarnings("ignore")
+    # data_bin = data_bin[~np.isnan(data_bin)]
+    # count = data_bin.shape[0]
+    # if count > 1:
+    #     if n_samples is not None:
+    #         cci = ci(data_bin, n_samples=n_samples)
+    #     else:
+    #         cci = np.array([np.nan, np.nan])
+    #     mu = np.nanmean(data_bin)
+    # else:
+    #     cci = np.array([np.nan, np.nan])
+    #     mu = np.nan
+    # return mu, cci, count
+def weighted_boot_bin_stack(data_bin, weights, n_samples=3000):
     warnings.filterwarnings("ignore")
     data_bin = data_bin[~np.isnan(data_bin)]
     count = data_bin.shape[0]
@@ -90,6 +105,9 @@ def boot_bin_stack(data_bin, n_samples=3000):
         else:
             cci = np.array([np.nan, np.nan])
         mu = np.nanmean(data_bin)
+        # print(len(data_bin), len(weights))
+        # print(data_bin, weights)
+        mu = np.average(data_bin, weights=weights)
     else:
         cci = np.array([np.nan, np.nan])
         mu = np.nan
@@ -105,6 +123,36 @@ def _sta_val(stack_range, radius):
     x_s = np.cumsum((dep_mod.dz / dep_mod.R) / np.sqrt((1. / (skm2srad(0.08) ** 2. * (dep_mod.R / dep_mod.vs) ** -2)) - 1))
     dis = radius + rad2deg(x_s[-1]) + 0.5
     return dis
+
+
+def process_bin(bin_info, cpara, rfdep, fzone, stack_mul, stalst, dismin):
+    boot_stack = {}
+    bin_mu = np.zeros(cpara.stack_range.size)
+    bin_ci = np.zeros([cpara.stack_range.size, 2])
+    bin_count = np.zeros(cpara.stack_range.size)
+    print('Processing bin at lat: {:.3f} lon: {:.3f}'.format(bin_info[0], bin_info[1]))
+    idxs = select_sta(bin_info[0], bin_info[1], stalst, dismin)
+    for j, dep in enumerate(cpara.stack_range):
+        idx = int(j * stack_mul + cpara.stack_range[0]/cpara.dep_val)
+        bin_dep_amp = np.array([])
+        weights = np.array([])
+        for k in idxs:
+            stop_idx = np.where(rfdep[k]['stopindex'] >= idx)[0]
+            dist = distaz(rfdep[k]['piercelat'][stop_idx, idx], rfdep[k]['piercelon'][stop_idx, idx],
+                          bin_info[0], bin_info[1]).delta
+            fall_idx = np.where(dist < fzone[j])[0]
+            dists = dist[fall_idx]
+            sigma = fzone[j] / 2.0
+            weight = np.exp(-0.5 * (dists / sigma) ** 2)
+            bin_dep_amp = np.append(bin_dep_amp, rfdep[k]['moveout_correct'][stop_idx[fall_idx], idx])
+            weights = np.append(weights, weight)
+        bin_mu[j], bin_ci[j], bin_count[j] = weighted_boot_bin_stack(bin_dep_amp, weights=weights, n_samples=cpara.boot_samples)
+    boot_stack['bin_lat'] = bin_info[0]
+    boot_stack['bin_lon'] = bin_info[1]
+    boot_stack['mu'] = bin_mu
+    boot_stack['ci'] = bin_ci
+    boot_stack['count'] = bin_count
+    return boot_stack
 
 
 class CCP3D():
@@ -174,31 +222,13 @@ class CCP3D():
         return np.where(distaz(bin_lat, bin_lon, self.stalst[:, 0], self.stalst[:, 1]).delta <= self.dismin)[0]
 
     def stack(self):
-        """Search conversion points falling within a bin and stack them with bootstrap method.
-        """
-        for i, bin_info in enumerate(self.bin_loca):
-            boot_stack = {}
-            bin_mu = np.zeros(self.cpara.stack_range.size)
-            bin_ci = np.zeros([self.cpara.stack_range.size, 2])
-            bin_count = np.zeros(self.cpara.stack_range.size)
-            self.logger.CCPlog.info('{}/{} bin at lat: {:.3f} lon: {:.3f}'.format(i + 1, self.bin_loca.shape[0],
-                                                                                  bin_info[0], bin_info[1]))
-            idxs = self._select_sta(bin_info[0], bin_info[1])
-            for j, dep in enumerate(self.cpara.stack_range):
-                idx = int(j * self.stack_mul + self.cpara.stack_range[0]/self.cpara.dep_val)
-                bin_dep_amp = np.array([])
-                for k in idxs:
-                    stop_idx = np.where(self.rfdep[k]['stopindex'] >= idx)[0]
-                    fall_idx = np.where(distaz(self.rfdep[k]['piercelat'][stop_idx, idx], self.rfdep[k]['piercelon'][stop_idx, idx],
-                                        bin_info[0], bin_info[1]).delta < self.fzone[j])[0]
-                    bin_dep_amp = np.append(bin_dep_amp, self.rfdep[k]['moveout_correct'][stop_idx[fall_idx], idx])
-                bin_mu[j], bin_ci[j], bin_count[j] = boot_bin_stack(bin_dep_amp, n_samples=self.cpara.boot_samples)
-            boot_stack['bin_lat'] = bin_info[0]
-            boot_stack['bin_lon'] = bin_info[1]
-            boot_stack['mu'] = bin_mu
-            boot_stack['ci'] = bin_ci
-            boot_stack['count'] = bin_count
-            self.stack_data.append(boot_stack)
+        """Search conversion points falling within a bin and stack them with bootstrap method (parallel version)."""
+        # 準備所有參數
+        args = [(bin_info, self.cpara, self.rfdep, self.fzone, self.stack_mul, self.stalst, self.dismin) for bin_info in self.bin_loca]
+        from multiprocessing import Pool
+        with Pool(40) as pool:
+            results = pool.starmap(process_bin, args)
+        self.stack_data = results
  
     def save_stack_data(self, fname):
         """Save stacked data and parameters to local as a npz file. To load the file, please use data = np.load(fname, allow_pickle=True).
@@ -347,6 +377,9 @@ class CCP3D():
             return result[0], result[1]
         else:
             return np.nan, np.nan
+
+def select_sta(bin_lat, bin_lon, stalst, dismin):
+    return np.where(distaz(bin_lat, bin_lon, stalst[:, 0], stalst[:, 1]).delta <= dismin)[0]
 
 if __name__ == '__main__':
     bin_loca = gen_center_bin(48.5, 100, 5, 8, km2deg(55))

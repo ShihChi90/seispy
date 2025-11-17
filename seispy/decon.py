@@ -189,7 +189,7 @@ def deconit(uin, win, dt, nt=None, tshift=10, f0=2.0, itmax=400, minderr=0.001, 
     p_flt = phaseshift(p_flt, nfft, dt, tshift)
     RFI = p_flt[0:nt]
     rms = rms[0:it - 1]
-
+    RFI = RFI / (f0/np.sqrt(np.pi)) # normalize iterdecon rf (see Ammon http://eqseis.geosc.psu.edu/cammon/HTML/RftnDocs/seq01.html)
     return RFI, rms, it 
     
 
