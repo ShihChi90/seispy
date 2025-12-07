@@ -11,23 +11,27 @@ def _joint_stack(energy_r, energy_cc, energy_tc, weight=[0.4, 0.3, 0.3]):
     energy_r = energy_r / np.max(energy_r)
     energy_cc = energy_cc / np.max(energy_cc)
     energy_tc = energy_tc / np.max(energy_tc)
-    return np.exp(np.log(energy_r) * weight[0] + np.log(energy_cc) * weight[1] - np.log(energy_tc) * weight[2])
+    return np.exp(
+        np.log(energy_r) * weight[0]
+        + np.log(energy_cc) * weight[1]
+        - np.log(energy_tc) * weight[2]
+    )
 
 
 def _average_delay(fd, td):
     uniq_fd = np.unique(fd)
     if uniq_fd.size > 2:
-        raise ValueError('FVD do not converge, {} gotten'.format(uniq_fd))
+        raise ValueError("FVD do not converge, {} gotten".format(uniq_fd))
     uniq_td = []
     for i, fv in enumerate(uniq_fd):
-        idx = np.where(fd==fv)[0]
+        idx = np.where(fd == fv)[0]
         uniq_td.append(np.mean(td[idx]))
     return uniq_fd, np.array(uniq_td)
 
 
-class RFAni():
-    def __init__(self, sacdatar, tb, te, tlen=3, val=10, rayp=0.06, model='iasp91'):
-        """ Estimate crustal anisotropy with a joint method. 
+class RFAni:
+    def __init__(self, sacdatar, tb, te, tlen=3, val=10, rayp=0.06, model="iasp91"):
+        """Estimate crustal anisotropy with a joint method.
             See Liu and Niu (2012, doi: 10.1111/j.1365-246X.2011.05249.x) in detail.
 
         Parameters
@@ -71,13 +75,13 @@ class RFAni():
         """
         self.stack_range = np.arange(0, 360, val)
         stacked_data = self.sacdatar.bin_stack(lim=[0, 360], val=val)
-        self.rfr_baz = stacked_data['data_prime']
-        self.rft_baz = stacked_data['datat']
-        self.count_baz = stacked_data['count']
+        self.rfr_baz = stacked_data["data_prime"]
+        self.rft_baz = stacked_data["datat"]
+        self.count_baz = stacked_data["count"]
 
     def _search_peak_amp(self):
         mean_rf = np.mean(self.rfr_baz, axis=0)
-        nmax = extrema(mean_rf[self.nbs:self.nes])+self.nbs
+        nmax = extrema(mean_rf[self.nbs : self.nes]) + self.nbs
         if nmax.size > 1:
             nps = nmax[np.nanargmax(mean_rf[nmax])]
         else:
@@ -90,18 +94,16 @@ class RFAni():
         self.fvd_1d = np.arange(0, 361, 1)
 
     def _cut_energy_waveform(self, idx, nb, ne):
-        """Cut energy waveform with given index, nb and ne.
-        """
-        engr = np.zeros([nb.shape[0], nb.shape[1], self.ne-self.nb])
+        """Cut energy waveform with given index, nb and ne."""
+        engr = np.zeros([nb.shape[0], nb.shape[1], self.ne - self.nb])
         for i in range(nb.shape[0]):
             for j in range(nb.shape[1]):
-                engr[i, j, :] = self.rfr_baz[idx, nb[i, j]:ne[i, j]]
+                engr[i, j, :] = self.rfr_baz[idx, nb[i, j] : ne[i, j]]
         return engr
 
     def radial_energy_max(self):
-        """Calculate the energy of radial component.
-        """
-        energy = np.zeros([self.fvd.shape[0], self.fvd.shape[1], self.ne-self.nb])
+        """Calculate the energy of radial component."""
+        energy = np.zeros([self.fvd.shape[0], self.fvd.shape[1], self.ne - self.nb])
         # tmp_data = np.zeros(self.ne-self.nb)
         for i, baz in enumerate(self.stack_range):
             t_corr = (self.deltat / 2) * cosd(2 * (self.fvd - baz))
@@ -109,49 +111,60 @@ class RFAni():
             new_nb = self.nb - nt_corr
             new_ne = self.ne - nt_corr
             energy += self._cut_energy_waveform(i, new_nb, new_ne)
-        energy = np.max(energy ** 2, axis=2)
-        energy /= np.max(np.sum(self.rfr_baz[:, self.nb:self.ne], axis=0)**2)
+        energy = np.max(energy**2, axis=2)
+        energy /= np.max(np.sum(self.rfr_baz[:, self.nb : self.ne], axis=0) ** 2)
         return energy
 
     def xyz2grd(self, energy):
-        """Interpolate energy to grid.
-        """
+        """Interpolate energy to grid."""
         self.fvd, self.deltat = np.meshgrid(self.fvd_1d, self.deltat_1d)
         return griddata(self.ani_points, energy, (self.fvd, self.deltat))
 
     def rotate_to_fast_slow(self):
-        """Rotate RF data to fast and slow direction.
-        """
-        self.ani_points = np.array([[f, d] for f in self.fvd_1d for d in self.deltat_1d])
+        """Rotate RF data to fast and slow direction."""
+        self.ani_points = np.array(
+            [[f, d] for f in self.fvd_1d for d in self.deltat_1d]
+        )
         energy_cc = np.zeros(self.ani_points.shape[0])
         energy_tc = np.zeros(self.ani_points.shape[0])
-        raw_energy_r = np.sum(np.sum(self.rfr_baz[:, self.nb:self.ne], axis=0) ** 2 - np.sum(self.rfr_baz[:, self.nb:self.ne] ** 2, axis=0))
-        raw_energy_t = np.sum(np.sum(self.rft_baz[:, self.nb:self.ne] ** 2, axis=0))
+        raw_energy_r = np.sum(
+            np.sum(self.rfr_baz[:, self.nb : self.ne], axis=0) ** 2
+            - np.sum(self.rfr_baz[:, self.nb : self.ne] ** 2, axis=0)
+        )
+        raw_energy_t = np.sum(np.sum(self.rft_baz[:, self.nb : self.ne] ** 2, axis=0))
         for i, point in enumerate(self.ani_points):
-            nt_corr = (point[1]/2 / self.sacdatar.sampling).astype(int)
+            nt_corr = (point[1] / 2 / self.sacdatar.sampling).astype(int)
             nt_fast = np.arange(self.nb, self.ne) + nt_corr
             nt_slow = np.arange(self.nb, self.ne) - nt_corr
-            fcr = np.zeros(self.ne-self.nb)
-            fcr_sq = np.zeros(self.ne-self.nb)
+            fcr = np.zeros(self.ne - self.nb)
+            fcr_sq = np.zeros(self.ne - self.nb)
             fct = 0
             for j, baz in enumerate(self.stack_range):
-                data_fast = self.rfr_baz[j, nt_slow] * cosd(point[0] - baz) + self.rft_baz[j, nt_slow] * sind(point[0] - baz)
-                data_slow = -self.rfr_baz[j, nt_fast] * sind(point[0] - baz) + self.rft_baz[j, nt_fast] * cosd(point[0] - baz)
-                back_rotate_data_r = data_fast * cosd(point[0] - baz) - data_slow * sind(point[0] - baz)
-                back_rotate_data_t = data_fast * sind(point[0] - baz) + data_slow * cosd(point[0] - baz)
+                data_fast = self.rfr_baz[j, nt_slow] * cosd(
+                    point[0] - baz
+                ) + self.rft_baz[j, nt_slow] * sind(point[0] - baz)
+                data_slow = -self.rfr_baz[j, nt_fast] * sind(
+                    point[0] - baz
+                ) + self.rft_baz[j, nt_fast] * cosd(point[0] - baz)
+                back_rotate_data_r = data_fast * cosd(
+                    point[0] - baz
+                ) - data_slow * sind(point[0] - baz)
+                back_rotate_data_t = data_fast * sind(
+                    point[0] - baz
+                ) + data_slow * cosd(point[0] - baz)
                 fcr += back_rotate_data_r
-                fcr_sq += back_rotate_data_r ** 2
+                fcr_sq += back_rotate_data_r**2
                 # print(np.sum(back_rotate_data_t ** 2), np.sum(self.rft_baz[j, self.nb:self.ne] ** 2))
-                fct += np.sum(back_rotate_data_t ** 2)
-            energy_cc[i] = np.sum(fcr ** 2 - fcr_sq) / raw_energy_r
-            energy_tc[i] = fct/ raw_energy_t
+                fct += np.sum(back_rotate_data_t**2)
+            energy_cc[i] = np.sum(fcr**2 - fcr_sq) / raw_energy_r
+            energy_tc[i] = fct / raw_energy_t
         # energy_cc /= np.max(np.abs(energy_cc))
         energy_tc /= np.max(np.abs(energy_tc))
         return self.xyz2grd(energy_cc), self.xyz2grd(energy_tc)
 
-    def plot_stack_baz(self, enf=60, outpath='./'):
+    def plot_stack_baz(self, enf=60, outpath="./"):
         """Plot the stack of RF data with back-azimuth.
-        
+
         Parameters
         ----------
         enf : int, optional
@@ -162,7 +175,7 @@ class RFAni():
         ml = MultipleLocator(5)
         bound = np.zeros_like(self.sacdatar.time_axis)
         plt.style.use("bmh")
-        plt.rc('grid', color='white', linestyle='-', linewidth=0.7)
+        plt.rc("grid", color="white", linestyle="-", linewidth=0.7)
         plt.rcParams["axes.grid.axis"] = "x"
         fig = plt.figure(figsize=(15, 8))
         axr = plt.subplot(1, 2, 1)
@@ -171,8 +184,22 @@ class RFAni():
                 continue
             amp = self.rfr_baz[i] * enf + baz
             # axr.plot(time_axis, amp, linewidth=0.2, color='black')
-            axr.fill_between(self.sacdatar.time_axis, amp, bound + baz, where=amp > self.stack_range[i], facecolor='red', alpha=0.7)
-            axr.fill_between(self.sacdatar.time_axis, amp, bound + baz, where=amp < self.stack_range[i], facecolor='#1193F4', alpha=0.7)
+            axr.fill_between(
+                self.sacdatar.time_axis,
+                amp,
+                bound + baz,
+                where=amp > self.stack_range[i],
+                facecolor="red",
+                alpha=0.7,
+            )
+            axr.fill_between(
+                self.sacdatar.time_axis,
+                amp,
+                bound + baz,
+                where=amp < self.stack_range[i],
+                facecolor="#1193F4",
+                alpha=0.7,
+            )
         # axr.plot([0, 0], [0, 360], linewidth=1, color='black')
         # axr.set_xlim([-1, 15])
         # axr.xaxis.set_major_locator(MultipleLocator(2))
@@ -181,7 +208,10 @@ class RFAni():
         # axr.yaxis.set_minor_locator(ml)
         # axr.set_ylabel('Back-azimuth ($^\circ$)')
         # axr.set_xlabel('Time after P(s)')
-        axr.set_title('{} component ({})'.format(self.sacdatar.comp, self.sacdatar.staname), fontsize=16)
+        axr.set_title(
+            "{} component ({})".format(self.sacdatar.comp, self.sacdatar.staname),
+            fontsize=16,
+        )
 
         axt = plt.subplot(1, 2, 2)
         # axt.grid(color='gray', linestyle='--', linewidth=0.4, axis='x')
@@ -190,16 +220,30 @@ class RFAni():
                 continue
             amp = self.rft_baz[i] * enf + baz
             # axt.plot(time_axis, amp, linewidth=0.2, color='black')
-            axt.fill_between(self.sacdatar.time_axis, amp, bound + baz, where=amp > baz, facecolor='red', alpha=0.7)
-            axt.fill_between(self.sacdatar.time_axis, amp, bound + baz, where=amp < baz, facecolor='#1193F4', alpha=0.7)
+            axt.fill_between(
+                self.sacdatar.time_axis,
+                amp,
+                bound + baz,
+                where=amp > baz,
+                facecolor="red",
+                alpha=0.7,
+            )
+            axt.fill_between(
+                self.sacdatar.time_axis,
+                amp,
+                bound + baz,
+                where=amp < baz,
+                facecolor="#1193F4",
+                alpha=0.7,
+            )
         for ax in [axr, axt]:
-            ax.plot([0, 0], [-30, 400], linewidth=1, color='black')
+            ax.plot([0, 0], [-30, 400], linewidth=1, color="black")
             ax.set_xlim(-1, 15)
             ax.xaxis.set_major_locator(MultipleLocator(2))
             ax.set_ylim(-10, 370)
-            ax.set_yticks(np.arange(0, 360+30, 30))
+            ax.set_yticks(np.arange(0, 360 + 30, 30))
             ax.yaxis.set_minor_locator(ml)
-            ax.set_xlabel('Time after P (s)',  fontsize=16)
+            ax.set_xlabel("Time after P (s)", fontsize=16)
         # axt.plot([0, 0], [0, 360], linewidth=1, color='black')
         # axt.set_xlim([-1, 15])
         # # axt.set_xticks(np.arange(0, 5))
@@ -207,10 +251,14 @@ class RFAni():
         # axt.set_ylim(0, 360)
         # axt.set_yticks(np.arange(0, 360+30, 30))
         # axt.yaxis.set_minor_locator(ml)
-        axr.set_ylabel(r'Back-azimuth ($^\circ$)',  fontsize=16)
+        axr.set_ylabel(r"Back-azimuth ($^\circ$)", fontsize=16)
         # axt.set_xlabel('Time after P(s)')
-        axt.set_title('T component ({})'.format(self.sacdatar.staname), fontsize=16)
-        fig.savefig(join(outpath, '{}_baz_stack.png'.format(self.sacdatar.staname)), dpi=400, bbox_inches='tight')
+        axt.set_title("T component ({})".format(self.sacdatar.staname), fontsize=16)
+        fig.savefig(
+            join(outpath, "{}_baz_stack.png".format(self.sacdatar.staname)),
+            dpi=400,
+            bbox_inches="tight",
+        )
 
     def plot_correct(self, fvd=0, dt=0.44, enf=80, outpath=None):
         """Plot the RF data with back-azimuth and time after P corrected.
@@ -226,45 +274,73 @@ class RFAni():
         outpath : str, optional
             Output path for saving the figure, by default None
         """
-        nt_corr = int((dt/2 / self.sacdatar.sampling))
+        nt_corr = int((dt / 2 / self.sacdatar.sampling))
         # nt_fast = np.arange(self.nb, self.ne) + nt_corr
         # nt_slow = np.arange(self.nb, self.ne) - nt_corr
-        time_axis = np.arange(self.nb, self.ne) * self.sacdatar.sampling - self.sacdatar.shift
+        time_axis = (
+            np.arange(self.nb, self.ne) * self.sacdatar.sampling - self.sacdatar.shift
+        )
         bound = np.zeros_like(time_axis)
         ml = MultipleLocator(5)
         plt.figure(figsize=(8, 6))
         axr = plt.subplot(1, 2, 1)
         axt = plt.subplot(1, 2, 2)
         for j, baz in enumerate(self.sacdatar.baz):
-            rot_fast = self.rfr_baz[j] * cosd(fvd - baz) + self.rft_baz[j] * sind(fvd - baz)
-            rot_slow = -self.rfr_baz[j] * sind(fvd - baz) + self.rft_baz[j] * cosd(fvd - baz)
-            data_fast = rot_fast[self.nb-nt_corr:self.ne-nt_corr]
-            data_slow = rot_slow[self.nb+nt_corr:self.ne+nt_corr]
-            back_rotate_data_r = data_fast * cosd(fvd - baz) - data_slow * sind(fvd - baz)
-            back_rotate_data_t = data_fast * sind(fvd - baz) + data_slow * cosd(fvd - baz)
+            rot_fast = self.rfr_baz[j] * cosd(fvd - baz) + self.rft_baz[j] * sind(
+                fvd - baz
+            )
+            rot_slow = -self.rfr_baz[j] * sind(fvd - baz) + self.rft_baz[j] * cosd(
+                fvd - baz
+            )
+            data_fast = rot_fast[self.nb - nt_corr : self.ne - nt_corr]
+            data_slow = rot_slow[self.nb + nt_corr : self.ne + nt_corr]
+            back_rotate_data_r = data_fast * cosd(fvd - baz) - data_slow * sind(
+                fvd - baz
+            )
+            back_rotate_data_t = data_fast * sind(fvd - baz) + data_slow * cosd(
+                fvd - baz
+            )
             amp = back_rotate_data_r * enf + baz
-            axr.plot(time_axis, amp, linewidth=0.2, color='black')
-            axr.fill_between(time_axis, amp, bound + baz, where=amp > baz, facecolor='red', alpha=0.5)
-            axr.fill_between(time_axis, amp, bound + baz, where=amp < baz, facecolor='blue', alpha=0.5)
+            axr.plot(time_axis, amp, linewidth=0.2, color="black")
+            axr.fill_between(
+                time_axis, amp, bound + baz, where=amp > baz, facecolor="red", alpha=0.5
+            )
+            axr.fill_between(
+                time_axis,
+                amp,
+                bound + baz,
+                where=amp < baz,
+                facecolor="blue",
+                alpha=0.5,
+            )
             amp = back_rotate_data_t * enf + baz
-            axt.plot(time_axis, amp, linewidth=0.2, color='black')
-            axt.fill_between(time_axis, amp, bound + baz, where=amp > baz, facecolor='red', alpha=0.5)
-            axt.fill_between(time_axis, amp, bound + baz, where=amp < baz, facecolor='blue', alpha=0.5)
+            axt.plot(time_axis, amp, linewidth=0.2, color="black")
+            axt.fill_between(
+                time_axis, amp, bound + baz, where=amp > baz, facecolor="red", alpha=0.5
+            )
+            axt.fill_between(
+                time_axis,
+                amp,
+                bound + baz,
+                where=amp < baz,
+                facecolor="blue",
+                alpha=0.5,
+            )
         for ax in [axr, axt]:
-            ax.grid(color='gray', linestyle='--', linewidth=0.4, axis='x')
+            ax.grid(color="gray", linestyle="--", linewidth=0.4, axis="x")
             ax.set_xlim(-1, 10)
             ax.set_xticks(np.arange(0, 11, 1))
             ax.set_ylim(-20, 370)
-            ax.set_yticks(np.arange(0, 360+30, 30))
+            ax.set_yticks(np.arange(0, 360 + 30, 30))
             ax.yaxis.set_minor_locator(ml)
-            ax.set_xlabel('Time after P(s)',  fontsize=16)
-        axr.set_ylabel(r'Back-azimuth ($^\circ$)', fontsize=16)
-        axr.set_title('R component',  fontsize=16)
-        axt.set_title('T component',  fontsize=16)
+            ax.set_xlabel("Time after P(s)", fontsize=16)
+        axr.set_ylabel(r"Back-azimuth ($^\circ$)", fontsize=16)
+        axr.set_title("R component", fontsize=16)
+        axt.set_title("T component", fontsize=16)
         if outpath is not None and isinstance(outpath, str):
-            plt.savefig(join(outpath, 'rf_corrected.png'), dpi=400, bbox_inches='tight')
+            plt.savefig(join(outpath, "rf_corrected.png"), dpi=400, bbox_inches="tight")
 
-    def search_peak_list(self, energy, opt='max'):
+    def search_peak_list(self, energy, opt="max"):
         """Search the peak of energy.
 
         Parameters
@@ -274,15 +350,15 @@ class RFAni():
         opt : str, optional
             Option for searching peak, by default 'max'
         """
-        if opt == 'max':
+        if opt == "max":
             ind = np.argwhere(energy == np.max(energy))
-        elif opt == 'min':
+        elif opt == "min":
             ind = np.argwhere(energy == np.min(energy))
         else:
-            raise ValueError('\'opt\' must be max or min')
+            raise ValueError("'opt' must be max or min")
         return self.ani_points[ind][:, 0], self.ani_points[ind][:, 1]
 
-    def search_peak(self, energy, opt='max'):
+    def search_peak(self, energy, opt="max"):
         """Search the peak of energy.
 
         Parameters
@@ -292,12 +368,12 @@ class RFAni():
         opt : str, optional
             Option for searching peak, by default 'max'
         """
-        if opt == 'max':
+        if opt == "max":
             ind = np.argwhere(energy == np.max(energy))
         # elif opt == 'min':
         #     ind = np.argwhere(energy == np.min(energy))
         else:
-            raise ValueError('\'opt\' must be in max or min')
+            raise ValueError("'opt' must be in max or min")
         cvalue = np.max(energy) - np.std(energy.reshape(energy.size))
         cs = plt.contour(self.fvd, self.deltat, energy, [cvalue])
         # Add for compatibility with matplotlib 3.10.0
@@ -323,20 +399,20 @@ class RFAni():
         """
         self.energy_r = self.radial_energy_max()
         self.energy_cc, self.energy_tc = self.rotate_to_fast_slow()
-        self.energy_joint = _joint_stack(self.energy_r, self.energy_cc, self.energy_tc, weight)
+        self.energy_joint = _joint_stack(
+            self.energy_r, self.energy_cc, self.energy_tc, weight
+        )
         self.best_velues = {}
-        for i, energy in enumerate([self.energy_r, self.energy_cc, -self.energy_tc, self.energy_joint]):
-            bf, bt, cvalue = self.search_peak(energy, opt='max')
+        for i, energy in enumerate(
+            [self.energy_r, self.energy_cc, -self.energy_tc, self.energy_joint]
+        ):
+            bf, bt, cvalue = self.search_peak(energy, opt="max")
             if i == 2:
-                cvalue *= -1.
-            self.best_velues[i] = {
-                'bestf': bf,
-                'bestt': bt,
-                'cvalue': cvalue
-            }
+                cvalue *= -1.0
+            self.best_velues[i] = {"bestf": bf, "bestt": bt, "cvalue": cvalue}
         return bf, bt
 
-    def plot_polar(self, cmap=load_cyan_map(), show=False, outpath='./'):
+    def plot_polar(self, cmap=load_cyan_map(), show=False, outpath="./"):
         """Polar map of crustal anisotropy. See Liu and Niu (2012, doi: 10.1111/j.1365-246X.2011.05249.x) in detail.
 
         :param cmap: Colormap of matplotlib, defaults to 'rainbow'
@@ -346,23 +422,39 @@ class RFAni():
         :param outpath: Output path to saving the figure. If show the figure in the Matplotlib window, this option will be invalid, defaults to current directory.
         :type outpath: str, optional
         """
-        fig, axes = plt.subplots(2, 2, figsize=(8, 7), subplot_kw={'projection': 'polar'}, constrained_layout=True)
+        fig, axes = plt.subplots(
+            2,
+            2,
+            figsize=(8, 7),
+            subplot_kw={"projection": "polar"},
+            constrained_layout=True,
+        )
         axs = [axes[0, 0], axes[0, 1], axes[1, 0], axes[1, 1]]
         energy_all = [self.energy_r, self.energy_cc, self.energy_tc, self.energy_joint]
-        energy_title = ['R cosine energy', 'R cross-correlation', 'T energy', 'Joint']
+        energy_title = ["R cosine energy", "R cross-correlation", "T energy", "Joint"]
         for i, ax, energy, title in zip(range(4), axs, energy_all, energy_title):
             ax.set_theta_direction(-1)
             ax.set_theta_zero_location("N")
-            if title == 'T energy':
-                eng = ax.pcolor(np.radians(self.fvd), self.deltat, energy, cmap=cmap.reversed())
+            if title == "T energy":
+                eng = ax.pcolor(
+                    np.radians(self.fvd), self.deltat, energy, cmap=cmap.reversed()
+                )
             else:
                 eng = ax.pcolor(np.radians(self.fvd), self.deltat, energy, cmap=cmap)
-            ax.grid(True, color='lightgray', linewidth=0.5)
+            ax.grid(True, color="lightgray", linewidth=0.5)
             # ax.contour(np.radians(self.fvd), self.deltat, energy, levels=[self.best_velues[i]['cvalue']])
-            ax.scatter(np.radians(self.best_velues[i]['bestf']), self.best_velues[i]['bestt'], color='white', marker='X', s=48)
+            ax.scatter(
+                np.radians(self.best_velues[i]["bestf"]),
+                self.best_velues[i]["bestt"],
+                color="white",
+                marker="X",
+                s=48,
+            )
             ax.set_xticks(np.radians(np.arange(0, 360, 30)))
             ax.set_yticks(np.arange(0, 1.5, 0.5))
-            title = r'{}\nFVD = ${:.0f}^\circ$, $\delta t$ = ${:.2f}$ s'.format(title, self.best_velues[i]['bestf'][0], self.best_velues[i]['bestt'][0])
+            title = r"{} FVD = ${:.0f}^\circ$, $\delta t$ = ${:.2f}$ s".format(
+                title, self.best_velues[i]["bestf"][0], self.best_velues[i]["bestt"][0]
+            )
             ax.set_title(title)
             fig.colorbar(eng, ax=ax)
         fig.suptitle(self.sacdatar.staname, fontsize=16)
@@ -370,7 +462,11 @@ class RFAni():
         if show:
             plt.show()
         else:
-            fig.savefig(join(outpath, f'{self.sacdatar.staname}_joint_ani.png'), dpi=400, bbox_inches='tight')
+            fig.savefig(
+                join(outpath, f"{self.sacdatar.staname}_joint_ani.png"),
+                dpi=400,
+                bbox_inches="tight",
+            )
 
 
 if __name__ == "__main__":
