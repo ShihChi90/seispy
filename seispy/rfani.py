@@ -8,9 +8,11 @@ from seispy.utils import load_cyan_map
 
 
 def _joint_stack(energy_r, energy_cc, energy_tc, weight=[0.4, 0.3, 0.3]):
-    energy_r = energy_r / np.max(energy_r)
-    energy_cc = energy_cc / np.max(energy_cc)
-    energy_tc = energy_tc / np.max(energy_tc)
+    # Clip to small positive value to avoid log(0) or log(negative)
+    eps = 1e-10
+    energy_r = np.clip(energy_r / np.max(energy_r), eps, None)
+    energy_cc = np.clip(energy_cc / np.max(energy_cc), eps, None)
+    energy_tc = np.clip(energy_tc / np.max(energy_tc), eps, None)
     return np.exp(
         np.log(energy_r) * weight[0]
         + np.log(energy_cc) * weight[1]
