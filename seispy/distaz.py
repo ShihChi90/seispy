@@ -6,15 +6,15 @@ class distaz:
     """
     Subroutine to calculate the Great Circle Arc distance
         between two sets of geographic coordinates
-    
+
     Equations take from Bullen, pages 154, 155
-    
+
     T. Owens, September 19, 1991
               Sept. 25 -- fixed az and baz calculations
     P. Crotwell, Setember 27, 1995
     Converted to c to fix annoying problem of fortran giving wrong
     answers if the input doesn't contain a decimal point.
-    
+
     H. P. Crotwell, September 18, 1997
     Java version for direct use in java programs.
     *
@@ -25,47 +25,34 @@ class distaz:
     H.P. Crotwell, May 31, 2006
     Port to python, thus adding to the great list of languages to which
     distaz has been ported from the origin fortran: C, Tcl, Java and now python
-    and I vaguely remember a perl port. Long live distaz! 
+    and I vaguely remember a perl port. Long live distaz!
 
     Mijian Xu, Jan 01, 2016
     Add np.ndarray to available input.
+
+    Shihchi Shao, Jan 2026
+    Fix compatibility with NumPy 2.0+ where np.where on 0d arrays raises error.
     """
 
     def __init__(self, lat1, lon1, lat2, lon2):
-        
+
         self.stalat = lat1
         self.stalon = lon1
         self.evtlat = lat2
         self.evtlon = lon2
-        '''
-        if (lat1 == lat2) and (lon1 == lon2):
-            self.delta = 0.0
-            self.az = 0.0
-            self.baz = 0.0
-            return
-        '''
 
-        rad = 2. * math.pi / 360.0
-        """
-        c
-        c scolat and ecolat are the geocentric colatitudes
-        c as defined by Richter (pg. 318)
-        c
-        c Earth Flattening of 1/298.257 take from Bott (pg. 3)
-        c
-        """
+        rad = 2.0 * math.pi / 360.0
         sph = 1.0 / 298.257
 
-        scolat = math.pi / 2.0 - np.arctan((1. - sph) * (1. - sph) * np.tan(lat1 * rad))
-        ecolat = math.pi / 2.0 - np.arctan((1. - sph) * (1. - sph) * np.tan(lat2 * rad))
+        scolat = math.pi / 2.0 - np.arctan(
+            (1.0 - sph) * (1.0 - sph) * np.tan(lat1 * rad)
+        )
+        ecolat = math.pi / 2.0 - np.arctan(
+            (1.0 - sph) * (1.0 - sph) * np.tan(lat2 * rad)
+        )
         slon = lon1 * rad
         elon = lon2 * rad
-        """
-	c
-	c  a - e are as defined by Bullen (pg. 154, Sec 10.2)
-	c     These are defined for the pt. 1
-	c
-        """
+
         a = np.sin(scolat) * np.cos(slon)
         b = np.sin(scolat) * np.sin(slon)
         c = np.cos(scolat)
@@ -74,11 +61,7 @@ class distaz:
         g = -c * e
         h = c * d
         k = -np.sin(scolat)
-        """
-	c
-	c  aa - ee are the same as a - e, except for pt. 2
-	c
-        """
+
         aa = np.sin(ecolat) * np.cos(elon)
         bb = np.sin(ecolat) * np.sin(elon)
         cc = np.cos(ecolat)
@@ -87,100 +70,40 @@ class distaz:
         gg = -cc * ee
         hh = cc * dd
         kk = -np.sin(ecolat)
-        """
-	c
-	c  Bullen, Sec 10.2, eqn. 4
-	c
-        """
+
         delrad = np.arccos(a * aa + b * bb + c * cc)
         self.delta = delrad / rad
-        """
-	c
-	c  Bullen, Sec 10.2, eqn 7 / eqn 8
-	c
-	c    pt. 1 is unprimed, so this is technically the baz
-	c
-	c  Calculate baz this way to avoid quadrant problems
-	c
-        """
-        rhs1 = (aa - d) * (aa - d) + (bb - e) * (bb - e) + cc * cc - 2.
-        rhs2 = (aa - g) * (aa - g) + (bb - h) * (bb - h) + (cc - k) * (cc - k) - 2.
+
+        rhs1 = (aa - d) * (aa - d) + (bb - e) * (bb - e) + cc * cc - 2.0
+        rhs2 = (aa - g) * (aa - g) + (bb - h) * (bb - h) + (cc - k) * (cc - k) - 2.0
         dbaz = np.arctan2(rhs1, rhs2)
 
-        dbaz_idx = np.where(dbaz < 0.0)[0]
-        if len(dbaz_idx) != 0:
-            if isinstance(dbaz, (int, float, np.integer, np.floating)):
-                dbaz += 2 * math.pi
-            else:
-                dbaz[dbaz_idx] += 2 * math.pi
+        # Use np.where with 3 arguments (ternary form) to avoid nonzero() on 0d arrays
+        dbaz = np.where(dbaz < 0.0, dbaz + 2 * math.pi, dbaz)
 
         self.baz = dbaz / rad
-        """
-	c
-	c  Bullen, Sec 10.2, eqn 7 / eqn 8
-	c
-	c    pt. 2 is unprimed, so this is technically the az
-	c
-	"""
-        rhs1 = (a - dd) * (a - dd) + (b - ee) * (b - ee) + c * c - 2.
-        rhs2 = (a - gg) * (a - gg) + (b - hh) * (b - hh) + (c - kk) * (c - kk) - 2.
+
+        rhs1 = (a - dd) * (a - dd) + (b - ee) * (b - ee) + c * c - 2.0
+        rhs2 = (a - gg) * (a - gg) + (b - hh) * (b - hh) + (c - kk) * (c - kk) - 2.0
         daz = np.arctan2(rhs1, rhs2)
 
-        daz_idx = np.where(daz < 0.0)[0]
-        if len(daz_idx) != 0:
-            if isinstance(daz, (int, float)):
-                daz += 2 * math.pi
-            else:
-                daz[daz_idx] += 2 * math.pi
+        # Use np.where with 3 arguments (ternary form) to avoid nonzero() on 0d arrays
+        daz = np.where(daz < 0.0, daz + 2 * math.pi, daz)
 
         self.az = daz / rad
-        """
-	c
-	c   Make sure 0.0 is always 0.0, not 360.
-	c
-	"""
-        idx = np.where(np.abs(self.baz - 360.) < .00001)[0]
-        if len(idx) != 0:
-            if isinstance(self.baz, float):
-                self.baz = 0.0
-            else:
-                self.baz[idx] = 0.0
-        idx = np.where(np.abs(self.baz) < .00001)[0]
-        if len(idx) != 0:
-            if isinstance(self.baz, float):
-                self.baz = 0.0
-            else:
-                self.baz[idx] = 0.0
 
-        idx = np.where(np.abs(self.az - 360.) < .00001)[0]
-        if len(idx) != 0:
-            if isinstance(self.az, float):
-                self.az = 0.0
-            else:
-                self.az[idx] = 0.0
-        idx = np.where(np.abs(self.az) < .00001)[0]
-        if len(idx) != 0:
-            if isinstance(self.az, float):
-                self.az = 0.0
-            else:
-                self.az[idx] = 0.0
-        
-        la_idx = np.where(lat1 == lat2)[0]
-        lo_idx = np.where(lon1 == lon2)[0]
-        idx = np.intersect1d(la_idx, lo_idx)
-        if len(idx) != 0:
-            if isinstance(self.delta, float):
-                self.delta = 0.
-            else:
-                self.delta[idx] = 0.
-            if isinstance(self.az, float):
-                self.az = 0.
-            else:
-                self.az[idx] = 0.
-            if isinstance(self.baz, float):
-                self.baz = 0.
-            else:
-                self.baz[idx] = 0.
+        # Make sure 0.0 is always 0.0, not 360.
+        # Use np.where with 3 arguments (ternary form) for NumPy 2.0+ compatibility
+        self.baz = np.where(np.abs(self.baz - 360.0) < 0.00001, 0.0, self.baz)
+        self.baz = np.where(np.abs(self.baz) < 0.00001, 0.0, self.baz)
+        self.az = np.where(np.abs(self.az - 360.0) < 0.00001, 0.0, self.az)
+        self.az = np.where(np.abs(self.az) < 0.00001, 0.0, self.az)
+
+        # Handle case where lat1 == lat2 and lon1 == lon2
+        same_location = (lat1 == lat2) & (lon1 == lon2)
+        self.delta = np.where(same_location, 0.0, self.delta)
+        self.az = np.where(same_location, 0.0, self.az)
+        self.baz = np.where(same_location, 0.0, self.baz)
 
     def getDelta(self):
         return self.delta
@@ -194,9 +117,8 @@ class distaz:
     def degreesToKilometers(self):
         return self.delta * 111.19
 
-# distaz = DistAz(0, 0, 1,1)
-# print "%f  %f  %f" % (distaz.getDelta(), distaz.getAz(), distaz.getBaz())
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     ela = 1
     elo = 1
     sla = 2
