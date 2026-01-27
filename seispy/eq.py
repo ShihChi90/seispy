@@ -5,8 +5,7 @@ from obspy.signal.rotate import rotate2zne, rotate_zne_lqt
 from scipy.signal import resample
 from os.path import join
 from seispy.decon import RFTrace
-from seispy.geo import snr, srad2skm, rotateSeisENtoTR, \
-                       rssq, extrema
+from seispy.geo import snr, srad2skm, rotateSeisENtoTR, rssq, extrema
 from seispy.utils import scalar_instance
 from obspy.signal.trigger import recursive_sta_lta
 import glob
@@ -15,31 +14,46 @@ import glob
 class NotEnoughComponent(Exception):
     def __init__(self, matchkey):
         self.matchkey = matchkey
+
     def __str__(self):
-        return '{}'.format(self.matchkey)
+        return "{}".format(self.matchkey)
+
 
 class TooMoreComponents(Exception):
     def __init__(self, matchkey):
         self.matchkey = matchkey
+
     def __str__(self):
-        return '{}'.format(self.matchkey)
+        return "{}".format(self.matchkey)
+
 
 def rotateZNE(st):
+    """Rotate non-standard components (e.g., 1, 2, Z) to N, E, Z components
+    and reorder the components to ensure that the final *.BHZ.SAC files have correct cmpaz (=0) and cmpinc (=0) headers.
+    """
     try:
         zne = rotate2zne(
-            st[0], st[0].stats.sac.cmpaz, st[0].stats.sac.cmpinc,
-            st[1], st[1].stats.sac.cmpaz, st[1].stats.sac.cmpinc,
-            st[2], st[2].stats.sac.cmpaz, st[2].stats.sac.cmpinc)
+            st[0].data,
+            st[0].stats.sac.cmpaz,
+            st[0].stats.sac.cmpinc - 90,
+            st[1].data,
+            st[1].stats.sac.cmpaz,
+            st[1].stats.sac.cmpinc - 90,
+            st[2].data,
+            st[2].stats.sac.cmpaz,
+            st[2].stats.sac.cmpinc - 90,
+        )
+        nez = [zne[1], zne[2], zne[0]]  # change order from ZNE to NEZ
     except Exception as e:
-        raise ValueError('No specified cmpaz or cmpinc. {}'.format(e))
-    for tr, new_data, component in zip(st, zne, "ZNE"):
+        raise ValueError("No specified cmpaz or cmpinc. {}".format(e))
+    for tr, new_data, component in zip(st, nez, "NEZ"):
         tr.data = new_data
         tr.stats.channel = tr.stats.channel[:-1] + component
 
 
 class EQ(object):
-    def __init__(self, pathname, datestr, suffix='SAC'):
-        """Class for processing event data with 3 components, which read SAC files of ``pathname*datastr*suffix`` 
+    def __init__(self, pathname, datestr, suffix="SAC"):
+        """Class for processing event data with 3 components, which read SAC files of ``pathname*datastr*suffix``
 
         :param pathname: Directory to SAC files
         :type pathname: string
@@ -49,8 +63,8 @@ class EQ(object):
         :type suffix: str, optional
         """
         self.datestr = datestr
-        self.filestr = join(pathname, '*' + datestr + '*' + suffix)
-        if glob.glob(self.filestr):  
+        self.filestr = join(pathname, "*" + datestr + "*" + suffix)
+        if glob.glob(self.filestr):
             self.st = obspy.read(self.filestr)
             self._check_comp()
             self.st.sort()
@@ -65,20 +79,27 @@ class EQ(object):
         self.inc_correction = 0
 
     def __str__(self):
-        return('Event data class {0}'.format(self.datestr))
-    
+        return "Event data class {0}".format(self.datestr)
+
     def _check_comp(self):
         if len(self.st) < 3:
-            channel = ' '.join([tr.stats.channel for tr in self.st])
-            raise NotEnoughComponent('Seismogram must be in 3 components, but there are only channel {} of {}'.format(channel, self.datestr))
+            channel = " ".join([tr.stats.channel for tr in self.st])
+            raise NotEnoughComponent(
+                "Seismogram must be in 3 components, but there are only channel {} of {}".format(
+                    channel, self.datestr
+                )
+            )
         elif len(self.st) > 3:
-            raise TooMoreComponents('{} has more than 3 components, please select to delete redundant seismic components'.format(self.datestr))
+            raise TooMoreComponents(
+                "{} has more than 3 components, please select to delete redundant seismic components".format(
+                    self.datestr
+                )
+            )
         else:
             pass
 
     def readstream(self):
-        """Read SAC files to stream
-        """
+        """Read SAC files to stream"""
         self.rf = obspy.Stream()
         self.st = obspy.read(self.filestr)
         self._check_comp()
@@ -97,25 +118,24 @@ class EQ(object):
         :return: EQ object
         :rtype: EQ
         """
-        eq = cls('', '')
+        eq = cls("", "")
         eq.st = stream
-        eq.datestr = eq.st[0].stats.starttime.strftime('%Y.%j.%H.%M.%S')
+        eq.datestr = eq.st[0].stats.starttime.strftime("%Y.%j.%H.%M.%S")
         eq._check_comp()
         eq.st.sort()
         eq.set_comp()
         return eq
 
     def set_comp(self):
-        """Set component name
-        """
-        if self.st.select(channel='*[E2]'):
-            self.comp = 'enz'
-        elif self.st.select(channel='*R'):
-            self.comp = 'rtz'
-        elif self.st.select(channel='*Q'):
-            self.comp = 'lqt'
+        """Set component name"""
+        if self.st.select(channel="*[E2]"):
+            self.comp = "enz"
+        elif self.st.select(channel="*R"):
+            self.comp = "rtz"
+        elif self.st.select(channel="*Q"):
+            self.comp = "lqt"
         else:
-            raise ValueError('No such component in R, E or Q')
+            raise ValueError("No such component in R, E or Q")
 
     def channel_correct(self, switchEN=False, reverseE=False, reverseN=False):
         """Correct channel name for R, E, N components
@@ -128,32 +148,35 @@ class EQ(object):
         :type reverseN: bool, optional
         """
         if reverseE:
-            self.st.select(channel='*[E2]')[0].data *= -1
+            self.st.select(channel="*[E2]")[0].data *= -1
         if reverseN:
-            self.st.select(channel='*[N1]')[0].data *= -1
+            self.st.select(channel="*[N1]")[0].data *= -1
         if switchEN:
-            chE = self.st.select(channel='*[E2]')[0].stats.channel
-            chN = self.st.select(channel='*[N1]')[0].stats.channel
-            self.st.select(channel='*[E2]')[0].stats.channel = chN
-            self.st.select(channel='*[N1]')[0].stats.channel = chE
+            chE = self.st.select(channel="*[E2]")[0].stats.channel
+            chN = self.st.select(channel="*[N1]")[0].stats.channel
+            self.st.select(channel="*[E2]")[0].stats.channel = chN
+            self.st.select(channel="*[N1]")[0].stats.channel = chE
 
     def write(self, path, evt_datetime):
         for tr in self.st:
             sac = SACTrace.from_obspy_trace(tr)
             sac.b = 0
             sac.o = evt_datetime - tr.stats.starttime
-            fname = join(path, '{}.{}.{}.{}.SAC'.format(
-                tr.stats.network, tr.stats.station,
-                tr.stats.starttime.strftime('%Y.%j.%H%M%S'),
-                tr.stats.channel
-            ))
+            fname = join(
+                path,
+                "{}.{}.{}.{}.SAC".format(
+                    tr.stats.network,
+                    tr.stats.station,
+                    tr.stats.starttime.strftime("%Y.%j.%H%M%S"),
+                    tr.stats.channel,
+                ),
+            )
             sac.write(fname)
 
     def detrend(self):
-        """Detrend and demean
-        """
-        self.st.detrend(type='linear')
-        self.st.detrend(type='constant')
+        """Detrend and demean"""
+        self.st.detrend(type="linear")
+        self.st.detrend(type="constant")
         self.fix_channel_name()
 
     def filter(self, freqmin=0.05, freqmax=1, order=4):
@@ -165,9 +188,11 @@ class EQ(object):
         :param order: filter order, defaults to 4
         :type order: int, optional
         """
-        self.st.filter('bandpass', freqmin=freqmin, freqmax=freqmax, corners=order, zerophase=True)
+        self.st.filter(
+            "bandpass", freqmin=freqmin, freqmax=freqmax, corners=order, zerophase=True
+        )
 
-    def get_arrival(self, model, evdp, dis, phase='P'):
+    def get_arrival(self, model, evdp, dis, phase="P"):
         """Get arrival time, ray parameter and incident angle from TauP model
         :param model: TauP model
         :type model: TauPyModel
@@ -181,7 +206,11 @@ class EQ(object):
         self.phase = phase
         arrivals = model.get_travel_times(evdp, dis, phase_list=[phase])
         if not arrivals:
-            raise ValueError('The phase of {} is not exists. Please check the setting of distance and phase'.format(phase))
+            raise ValueError(
+                "The phase of {} is not exists. Please check the setting of distance and phase".format(
+                    phase
+                )
+            )
         # if len(arrivals) > 1:
         #     raise ValueError('More than one phase were calculated with distance of {} and focal depth of {}'.format(dis, evdp))
         # else:
@@ -200,8 +229,10 @@ class EQ(object):
         s_range = self.trim(20, 20, isreturn=True)
         power = np.zeros(inc_range.shape[0])
         for i in range(len(inc_range)):
-            l_comp, _, _ = rotate_zne_lqt(s_range[2].data, s_range[1].data, s_range[0].data, bazi, inc_range[i])
-            power[i] = np.mean(l_comp ** 2)
+            l_comp, _, _ = rotate_zne_lqt(
+                s_range[2].data, s_range[1].data, s_range[0].data, bazi, inc_range[i]
+            )
+            power[i] = np.mean(l_comp**2)
 
         real_inc_idx = np.argmin(power)
         real_inc = inc_range[real_inc_idx]
@@ -223,15 +254,18 @@ class EQ(object):
         """
         p_arr = self.arr_correct(write_to_sac=False)
         this_st = self.st.copy()
-        this_st.filter('bandpass', freqmin=0.03, freqmax=0.5)
-        this_st.trim(this_st[0].stats.starttime+p_arr-time_b, this_st[0].stats.starttime+p_arr+time_e)
+        this_st.filter("bandpass", freqmin=0.03, freqmax=0.5)
+        this_st.trim(
+            this_st[0].stats.starttime + p_arr - time_b,
+            this_st[0].stats.starttime + p_arr + time_e,
+        )
         bazs = np.arange(-offset, offset) + bazi
         ampt = np.zeros_like(bazs)
         for i, b in enumerate(bazs):
             t, _ = rotateSeisENtoTR(this_st[0].data, this_st[1].data, b)
             ampt[i] = rssq(t)
         ampt = ampt / np.max(ampt)
-        idx = extrema(ampt, opt='min')
+        idx = extrema(ampt, opt="min")
         if len(idx) == 0:
             corr_baz = np.nan
         elif len(idx) > 1:
@@ -241,24 +275,31 @@ class EQ(object):
         return corr_baz, ampt
 
     def fix_channel_name(self):
-        """Fix channel name for R, E, N components
-        """
-        if self.st.select(channel='??1') and self.st.select(channel='??Z') and hasattr(self.st.select(channel='*1')[0].stats.sac, 'cmpaz'):
-            if self.st.select(channel='*1')[0].stats.sac.cmpaz == 0:
-                self.st.select(channel='*1')[0].stats.channel = self.st.select(channel='*1')[0].stats.channel[:-1] + 'N'
-                self.st.select(channel='*2')[0].stats.channel = self.st.select(channel='*2')[0].stats.channel[:-1] + 'E'
-            elif self.st.select(channel='*1')[0].stats.sac.cmpaz != 0:
+        """Fix channel name for R, E, N components"""
+        if (
+            self.st.select(channel="??1")
+            and self.st.select(channel="??Z")
+            and hasattr(self.st.select(channel="*1")[0].stats.sac, "cmpaz")
+        ):
+            if self.st.select(channel="*1")[0].stats.sac.cmpaz == 0:
+                self.st.select(channel="*1")[0].stats.channel = (
+                    self.st.select(channel="*1")[0].stats.channel[:-1] + "N"
+                )
+                self.st.select(channel="*2")[0].stats.channel = (
+                    self.st.select(channel="*2")[0].stats.channel[:-1] + "E"
+                )
+            elif self.st.select(channel="*1")[0].stats.sac.cmpaz != 0:
                 rotateZNE(self.st)
-            self.st.sort(['channel'])
-        elif self.st.select(channel='*1'):
-            self.st.select(channel='*1')[0].stats.channel = 'Z'
-            self.st.select(channel='*2')[0].stats.channel = 'N'
-            self.st.select(channel='*3')[0].stats.channel = 'E'
-            self.st.sort(['channel'])
+            self.st.sort(["channel"])
+        elif self.st.select(channel="*1"):
+            self.st.select(channel="*1")[0].stats.channel = "Z"
+            self.st.select(channel="*2")[0].stats.channel = "N"
+            self.st.select(channel="*3")[0].stats.channel = "E"
+            self.st.sort(["channel"])
         else:
             pass
 
-    def rotate(self, baz, inc=None, method='NE->RT', search_inc=False, baz_shift=0):
+    def rotate(self, baz, inc=None, method="NE->RT", search_inc=False, baz_shift=0):
         """Rotate to radial and transverse components
         :param baz: back azimuth
         :type baz: float
@@ -273,21 +314,21 @@ class EQ(object):
         """
         bazi = np.mod(baz + baz_shift, 360)
         if inc is None:
-            if self.phase[-1] == 'S' and search_inc:
+            if self.phase[-1] == "S" and search_inc:
                 inc = self.search_inc(bazi)
         else:
             self.inc = inc
 
-        if method == 'NE->RT':
-            self.comp = 'rtz'
-            self.st.rotate('NE->RT', back_azimuth=bazi)
-        elif method == 'RT->NE':
-            self.st.rotate('RT->NE', back_azimuth=bazi)
-        elif method == 'ZNE->LQT':
-            self.comp = 'lqt'
-            self.st.rotate('ZNE->LQT', back_azimuth=bazi, inclination=self.inc)
-        elif method == 'LQT->ZNE':
-            self.st.rotate('LQT->ZNE', back_azimuth=bazi, inclination=self.inc)
+        if method == "NE->RT":
+            self.comp = "rtz"
+            self.st.rotate("NE->RT", back_azimuth=bazi)
+        elif method == "RT->NE":
+            self.st.rotate("RT->NE", back_azimuth=bazi)
+        elif method == "ZNE->LQT":
+            self.comp = "lqt"
+            self.st.rotate("ZNE->LQT", back_azimuth=bazi, inclination=self.inc)
+        elif method == "LQT->ZNE":
+            self.st.rotate("LQT->ZNE", back_azimuth=bazi, inclination=self.inc)
         else:
             pass
 
@@ -313,23 +354,25 @@ class EQ(object):
         except IndexError:
             snr_Z = 0
         return snr_E, snr_N, snr_Z
-    
+
     def custom_snr(self, signallen=5, noiselen=20):
         st_noise = self.trim(noiselen, 0, isreturn=True)
         st_signal = self.trim(0, signallen, isreturn=True)
         snr_E = snr(np.array([max(abs(st_signal[0].data))]), st_noise[0].data)
         snr_N = snr(np.array([max(abs(st_signal[1].data))]), st_noise[1].data)
         snr_Z = snr(np.array([max(abs(st_signal[2].data))]), st_noise[2].data)
-        
+
         return snr_E, snr_N, snr_Z
-    
+
     def get_time_offset(self, event_time=None):
         """Get time offset from SAC header
         :param event_time: event time, defaults to None
         :type event_time: obspy.core.utcdatetime.UTCDateTime, optional
         """
-        if event_time is not None and not isinstance(event_time, obspy.core.utcdatetime.UTCDateTime):
-            raise TypeError('Event time should be UTCDateTime type in obspy')
+        if event_time is not None and not isinstance(
+            event_time, obspy.core.utcdatetime.UTCDateTime
+        ):
+            raise TypeError("Event time should be UTCDateTime type in obspy")
         elif event_time is None:
             self.timeoffset = self.st[2].stats.sac.b - self.st[2].stats.sac.o
         else:
@@ -353,8 +396,10 @@ class EQ(object):
         t2 = self.st[2].stats.starttime + (arr + self.trigger_shift + time_after)
         return t1, t2
 
-    def phase_trigger(self, time_before, time_after, prepick=True, stl=5, ltl=10, custom_shift=None):
-        """ Trigger P or S phase
+    def phase_trigger(
+        self, time_before, time_after, prepick=True, stl=5, ltl=10, custom_shift=None
+    ):
+        """Trigger P or S phase
         :param time_before: time before P or S arrival
         :type time_before: float
         :param time_after: time after P or S arrival
@@ -371,15 +416,15 @@ class EQ(object):
         if len(self.st_pick) == 0:
             return
         if prepick:
-            if self.phase[-1] == 'P':
-                tr = self.st_pick.select(channel='*Z')[0]
+            if self.phase[-1] == "P":
+                tr = self.st_pick.select(channel="*Z")[0]
             else:
-                tr = self.st_pick.select(channel='*T')[0]
+                tr = self.st_pick.select(channel="*T")[0]
             df = tr.stats.sampling_rate
-            cft = recursive_sta_lta(tr.data, int(stl*df), int(ltl*df))
-            n_trigger = np.argmax(np.diff(cft)[int(ltl*df):])+int(ltl*df)
-            self.t_trigger = t1 + n_trigger/df
-            self.trigger_shift = n_trigger/df - time_before
+            cft = recursive_sta_lta(tr.data, int(stl * df), int(ltl * df))
+            n_trigger = np.argmax(np.diff(cft)[int(ltl * df) :]) + int(ltl * df)
+            self.t_trigger = t1 + n_trigger / df
+            self.trigger_shift = n_trigger / df - time_before
         elif custom_shift is not None:
             self.t_trigger = t1 + custom_shift
             self.trigger_shift = custom_shift
@@ -397,8 +442,18 @@ class EQ(object):
         else:
             self.st.trim(t1, t2)
 
-    def deconvolute(self, shift, time_after, f0=2.0, method='iter', only_r=False,
-                    itmax=400, minderr=0.001, wlevel=0.05, target_dt=None):
+    def deconvolute(
+        self,
+        shift,
+        time_after,
+        f0=2.0,
+        method="iter",
+        only_r=False,
+        itmax=400,
+        minderr=0.001,
+        wlevel=0.05,
+        target_dt=None,
+    ):
         """Deconvolution
 
         Parameters
@@ -426,21 +481,20 @@ class EQ(object):
         if scalar_instance(f0):
             f0 = [f0]
         for ff in f0:
-            if method == 'iter':
-                kwargs = {'method': method,
-                        'f0': ff,
-                        'tshift': shift,
-                        'itmax': itmax,
-                        'minderr': minderr}
-            elif method == 'water':
-                kwargs = {'method': method,
-                        'f0': ff,
-                        'tshift': shift,
-                        'wlevel': wlevel}
+            if method == "iter":
+                kwargs = {
+                    "method": method,
+                    "f0": ff,
+                    "tshift": shift,
+                    "itmax": itmax,
+                    "minderr": minderr,
+                }
+            elif method == "water":
+                kwargs = {"method": method, "f0": ff, "tshift": shift, "wlevel": wlevel}
             else:
-                raise ValueError('method must be in \'iter\' or \'water\'')
+                raise ValueError("method must be in 'iter' or 'water'")
 
-            if self.phase[-1] == 'P':
+            if self.phase[-1] == "P":
                 self.decon_p(**kwargs)
                 if not only_r:
                     self.decon_p(tcomp=True, **kwargs)
@@ -451,9 +505,11 @@ class EQ(object):
             if target_dt is not None:
                 for tr in self.rf:
                     if tr.stats.delta != target_dt:
-                        tr.data = resample(tr.data, int((shift + time_after)/target_dt+1))
+                        tr.data = resample(
+                            tr.data, int((shift + time_after) / target_dt + 1)
+                        )
                         tr.stats.delta = target_dt
-    
+
     def decon_p(self, tshift, tcomp=False, **kwargs):
         """Deconvolution for P wave
         :param tshift: Time shift before P arrival
@@ -461,20 +517,20 @@ class EQ(object):
         :param tcomp: Whether calculate transverse component, defaults to False
         :type tcomp: bool, optional
         """
-        if self.comp == 'lqt':
-            win = self.st.select(channel='*L')[0]
+        if self.comp == "lqt":
+            win = self.st.select(channel="*L")[0]
             if tcomp:
-                uin = self.st.select(channel='*T')[0]
+                uin = self.st.select(channel="*T")[0]
             else:
-                uin = self.st.select(channel='*Q')[0]
+                uin = self.st.select(channel="*Q")[0]
                 uin.data *= -1
         else:
-            win = self.st.select(channel='*Z')[0]
+            win = self.st.select(channel="*Z")[0]
             if tcomp:
-                uin = self.st.select(channel='*T')[0]
+                uin = self.st.select(channel="*T")[0]
             else:
-                uin = self.st.select(channel='*R')[0]
-        uout = RFTrace.deconvolute(uin, win, phase='P', tshift=tshift, **kwargs)
+                uin = self.st.select(channel="*R")[0]
+        uout = RFTrace.deconvolute(uin, win, phase="P", tshift=tshift, **kwargs)
         self.rf.append(uout)
 
     def decon_s(self, tshift, **kwargs):
@@ -482,21 +538,33 @@ class EQ(object):
         :param tshift: Time shift before P arrival
         :type tshift: float
         """
-        if self.comp == 'lqt':
-            win = self.st.select(channel='*Q')[0]
-            uin = self.st.select(channel='*L')[0]
+        if self.comp == "lqt":
+            win = self.st.select(channel="*Q")[0]
+            uin = self.st.select(channel="*L")[0]
         else:
-            win = self.st.select(channel='*R')[0]
-            uin = self.st.select(channel='*Z')[0]
+            win = self.st.select(channel="*R")[0]
+            uin = self.st.select(channel="*Z")[0]
             win.data *= -1
         # win.data[0:int((tshift-4)/win.stats.delta)] = 0
-        uout = RFTrace.deconvolute(uin, win, phase='S', tshift=tshift, **kwargs)
+        uout = RFTrace.deconvolute(uin, win, phase="S", tshift=tshift, **kwargs)
         uout.data = np.flip(uout.data)
         self.rf.append(uout)
 
-    def saverf(self, path, evtstr=None, shift=0, evla=-12345., 
-               evlo=-12345., evdp=-12345., mag=-12345.,
-               gauss=0, baz=-12345., gcarc=-12345., only_r=False, **kwargs):
+    def saverf(
+        self,
+        path,
+        evtstr=None,
+        shift=0,
+        evla=-12345.0,
+        evlo=-12345.0,
+        evdp=-12345.0,
+        mag=-12345.0,
+        gauss=0,
+        baz=-12345.0,
+        gcarc=-12345.0,
+        only_r=False,
+        **kwargs,
+    ):
         """Save receiver function to SAC file
         :param path: path to save SAC file
         :type path: str
@@ -521,21 +589,21 @@ class EQ(object):
         :param only_r: whether only save R component, defaults to False
         :type only_r: bool, optional
         """
-        if self.phase[-1] == 'P':
-            if self.comp == 'lqt':
-                svcomp = 'Q'
+        if self.phase[-1] == "P":
+            if self.comp == "lqt":
+                svcomp = "Q"
             else:
-                svcomp = 'R'
+                svcomp = "R"
             if only_r:
                 loop_lst = [svcomp]
             else:
-                loop_lst = [svcomp, 'T']
+                loop_lst = [svcomp, "T"]
             rayp = srad2skm(self.rayp)
-        elif self.phase[-1] == 'S':
-            if self.comp == 'lqt':
-                loop_lst = ['L']
+        elif self.phase[-1] == "S":
+            if self.comp == "lqt":
+                loop_lst = ["L"]
             else:
-                loop_lst = ['Z']
+                loop_lst = ["Z"]
             rayp = srad2skm(self.rayp)
         else:
             pass
@@ -544,32 +612,42 @@ class EQ(object):
         else:
             filename = join(path, evtstr)
         for comp in loop_lst:
-            trrfs = self.rf.select(channel='*'+comp)
+            trrfs = self.rf.select(channel="*" + comp)
             try:
                 trrf = [tr for tr in trrfs if tr.stats.f0 == gauss][0]
             except:
-                ValueError('No such gauss factor of {} in calculated RFs'.format(gauss))
-            header = {'evla': evla, 'evlo': evlo, 'evdp': evdp, 'mag': mag, 'baz': baz,
-                      'gcarc': gcarc, 'user0': rayp, 'kuser0': 'Ray Para', 'user1': gauss, 'kuser1': 'G factor'}
+                ValueError("No such gauss factor of {} in calculated RFs".format(gauss))
+            header = {
+                "evla": evla,
+                "evlo": evlo,
+                "evdp": evdp,
+                "mag": mag,
+                "baz": baz,
+                "gcarc": gcarc,
+                "user0": rayp,
+                "kuser0": "Ray Para",
+                "user1": gauss,
+                "kuser1": "G factor",
+            }
             for key in kwargs:
                 header[key] = kwargs[key]
             for key, value in header.items():
-                trrf.stats['sac'][key] = value
+                trrf.stats["sac"][key] = value
             tr = SACTrace.from_obspy_trace(trrf)
             tr.b = -shift
             tr.a = 0
             tr.ka = self.phase
-            tr.write(filename + '_{0}_{1}.sac'.format(self.phase, tr.kcmpnm[-1]))
+            tr.write(filename + "_{0}_{1}.sac".format(self.phase, tr.kcmpnm[-1]))
 
     def _s_condition(self, trrf, shift):
-        nt0 = int(np.floor((shift)/trrf.stats.delta))
-        nt25 = int(np.floor((shift+25)/trrf.stats.delta))
+        nt0 = int(np.floor((shift) / trrf.stats.delta))
+        nt25 = int(np.floor((shift + 25) / trrf.stats.delta))
         if rssq(trrf.data[nt0:nt25]) > rssq(trrf.data[nt25:]):
             return True
         else:
             return False
 
-    def judge_rf(self, gauss, shift, npts, criterion='crust', rmsgate=None):
+    def judge_rf(self, gauss, shift, npts, criterion="crust", rmsgate=None):
         """Judge whether receiver function is valid
         :param gauss: Gaussian factor
         :type gauss: float
@@ -584,41 +662,41 @@ class EQ(object):
         :return: whether RF is valid
         :rtype: bool
         """
-        if self.phase[-1] == 'P' and self.comp == 'rtz':
-            trrfs = self.rf.select(channel='*R')
-        elif self.phase[-1] == 'P' and self.comp == 'lqt':
-            trrfs = self.rf.select(channel='*Q')
-        elif self.phase[-1] == 'S' and self.comp == 'lqt':
-            trrfs = self.rf.select(channel='*L')
-        elif self.phase[-1] == 'S' and self.comp == 'rtz':
-            trrfs = self.rf.select(channel='*Z')
-        for tr in trrfs:      
+        if self.phase[-1] == "P" and self.comp == "rtz":
+            trrfs = self.rf.select(channel="*R")
+        elif self.phase[-1] == "P" and self.comp == "lqt":
+            trrfs = self.rf.select(channel="*Q")
+        elif self.phase[-1] == "S" and self.comp == "lqt":
+            trrfs = self.rf.select(channel="*L")
+        elif self.phase[-1] == "S" and self.comp == "rtz":
+            trrfs = self.rf.select(channel="*Z")
+        for tr in trrfs:
             if tr.stats.npts != npts:
                 return False
         try:
             trrf = [tr for tr in trrfs if tr.stats.f0 == gauss][0]
         except:
-            ValueError('No such gauss factor of {} in calculated RFs'.format(gauss))
-        
+            ValueError("No such gauss factor of {} in calculated RFs".format(gauss))
+
         # All points are NaN
         if np.isnan(trrf.data).all():
             return False
-        
+
         if np.isinf(trrf.data).any():
             return False
-        
+
         # Final RMS
         if rmsgate is not None:
-            if self.method == 'iter':
+            if self.method == "iter":
                 rms = trrf.stats.rms[-1]
             else:
                 rms = trrf.stats.rms
             rmspass = rms < rmsgate
         else:
             rmspass = True
-        
+
         # R energy
-        nt1 = int(np.floor((5+shift)/trrf.stats.delta))
+        nt1 = int(np.floor((5 + shift) / trrf.stats.delta))
         reng = np.sum(np.sqrt(trrf.data[nt1:] ** 2))
         if reng < 0.1:
             rengpass = False
@@ -626,21 +704,31 @@ class EQ(object):
             rengpass = True
 
         # Max amplitude
-        if criterion == 'crust':
-            time_P1 = int(np.floor((-2+shift)/trrf.stats.delta))
-            time_P2 = int(np.floor((4+shift)/trrf.stats.delta))
+        if criterion == "crust":
+            time_P1 = int(np.floor((-2 + shift) / trrf.stats.delta))
+            time_P2 = int(np.floor((4 + shift) / trrf.stats.delta))
             max_P = np.max(trrf.data[time_P1:time_P2])
-            if max_P == np.max(np.abs(trrf.data)) and max_P < 1 and rmspass and rengpass:
+            if (
+                max_P == np.max(np.abs(trrf.data))
+                and max_P < 1
+                and rmspass
+                and rengpass
+            ):
                 return True and rengpass
             else:
                 return False
-        elif criterion == 'mtz':
-            max_deep = np.max(np.abs(trrf.data[int((30 + shift) / trrf.stats.delta):]))
+        elif criterion == "mtz":
+            max_deep = np.max(np.abs(trrf.data[int((30 + shift) / trrf.stats.delta) :]))
             time_P1 = int(np.floor((-5 + shift) / trrf.stats.delta))
             time_P2 = int(np.floor((5 + shift) / trrf.stats.delta))
             max_P = np.max(trrf.data[time_P1:time_P2])
-            if max_deep < max_P * 0.4 and rmspass and rengpass and\
-                  max_P == np.max(np.abs(trrf.data)) and max_P < 1:
+            if (
+                max_deep < max_P * 0.4
+                and rmspass
+                and rengpass
+                and max_P == np.max(np.abs(trrf.data))
+                and max_P < 1
+            ):
                 return True and rengpass
             else:
                 return False
@@ -652,18 +740,23 @@ class EQ(object):
             pass
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     from obspy import read, Stream
     from obspy.taup import TauPyModel
+
     # from glob import glob
     iasp91 = TauPyModel(model="iasp91")
-    trlst = sorted(glob.glob("/home/seismograms/SALUTE/sacdata_d28-95_rotate/TR05/PST2/2022*.sac"))
+    trlst = sorted(
+        glob.glob("/home/seismograms/SALUTE/sacdata_d28-95_rotate/TR05/PST2/2022*.sac")
+    )
     snr_results = []
     for i in range(0, len(trlst), 3):
-        trace = read(trlst[i]) + read(trlst[i+1]) + read(trlst[i+2])
+        trace = read(trlst[i]) + read(trlst[i + 1]) + read(trlst[i + 2])
         try:
             earthquake = EQ.from_stream(trace)
-            earthquake.get_arrival(iasp91, trace[0].stats.sac["evdp"], trace[0].stats.sac["gcarc"], "P")
+            earthquake.get_arrival(
+                iasp91, trace[0].stats.sac["evdp"], trace[0].stats.sac["gcarc"], "P"
+            )
             snr_E, snr_N, snr_Z = earthquake.custom_snr()
             snr_results.append((snr_E, snr_N, snr_Z))
             print(f"Group {i//3}: SNR_E={snr_E}, SNR_N={snr_N}, SNR_Z={snr_Z}")
@@ -675,4 +768,3 @@ if __name__ == '__main__':
     # snr_Z = earthquake.custom_snr()
     # print(snr_Z)
     pass
-
