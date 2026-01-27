@@ -113,7 +113,7 @@ def read_catalog(
     except:
         events = read_events(logpath, "QUAKEML")
         eq_lst = _cat2df(events)
-    dis = np.atleast_1d(distaz(stla, stlo, eq_lst["evla"], eq_lst["evlo"]).delta)
+    dis = distaz(stla, stlo, eq_lst["evla"], eq_lst["evlo"]).delta
     eq_lst = eq_lst[
         (eq_lst["date"] >= b_time)
         & (eq_lst["date"] <= e_time)
