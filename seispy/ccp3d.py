@@ -84,19 +84,19 @@ def boot_bin_stack(data_bin, n_samples=3000):
     :return: Mean, confidence interval and number of data falling within a bin.
     :rtype: tuple of floats and int
     """
-    # warnings.filterwarnings("ignore")
-    # data_bin = data_bin[~np.isnan(data_bin)]
-    # count = data_bin.shape[0]
-    # if count > 1:
-    #     if n_samples is not None:
-    #         cci = ci(data_bin, n_samples=n_samples)
-    #     else:
-    #         cci = np.array([np.nan, np.nan])
-    #     mu = np.nanmean(data_bin)
-    # else:
-    #     cci = np.array([np.nan, np.nan])
-    #     mu = np.nan
-    # return mu, cci, count
+    warnings.filterwarnings("ignore")
+    data_bin = data_bin[~np.isnan(data_bin)]
+    count = data_bin.shape[0]
+    if count > 1:
+        if n_samples is not None:
+            cci = ci(data_bin, n_samples=n_samples)
+        else:
+            cci = np.array([np.nan, np.nan])
+        mu = np.nanmean(data_bin)
+    else:
+        cci = np.array([np.nan, np.nan])
+        mu = np.nan
+    return mu, cci, count
 
 
 def weighted_boot_bin_stack(data_bin, weights, n_samples=3000):
@@ -159,6 +159,9 @@ def process_bin(bin_info, cpara, rfdep, fzone, stack_mul, stalst, dismin):
                 bin_dep_amp, rfdep[k]["moveout_correct"][stop_idx[fall_idx], idx]
             )
             weights = np.append(weights, weight)
+        # bin_mu[j], bin_ci[j], bin_count[j] = boot_bin_stack(
+        #     bin_dep_amp, n_samples=cpara.boot_samples
+        # )
         bin_mu[j], bin_ci[j], bin_count[j] = weighted_boot_bin_stack(
             bin_dep_amp, weights=weights, n_samples=cpara.boot_samples
         )
